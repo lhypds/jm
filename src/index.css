@@ -7,13 +7,21 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  /* iOS autosizing rescales text whose style changes, so a tapped word's hover shrank it; keep sizes as authored. */
+  /* Keep iOS from rescaling text away from the authored sizes. */
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
 }
 
 * {
   box-sizing: border-box;
+  scrollbar-width: none;
+}
+
+/* Scrolling still works; the bars are hidden because some in-app browsers, like WeChat's, reserve layout space for them. */
+*::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 html,
