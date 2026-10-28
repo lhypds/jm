@@ -36,6 +36,13 @@ body {
   background: #fff;
 }
 
+/* WeChat applies its own font-size setting by injecting text-size-adjust on body, which beats the inherited :root value; pin it on both. */
+html,
+body {
+  -webkit-text-size-adjust: 100% !important;
+  text-size-adjust: 100% !important;
+}
+
 /* The page scrolls inside .page, so pin the document and stop iOS from rubber-banding it when nothing overflows. */
 html,
 body {
