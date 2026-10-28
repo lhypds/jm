@@ -7,6 +7,9 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+  /* iOS autosizing rescales text whose style changes, so a tapped word's hover shrank it; keep sizes as authored. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 * {
