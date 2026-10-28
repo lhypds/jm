@@ -80,6 +80,33 @@ describe("insertEditorText", () => {
     before.setEnd(selection.anchorNode!, selection.anchorOffset);
     expect(editorText(before.cloneContents())).toBe("日本語");
   });
+
+  function caretInRuby(offset: number) {
+    const editor = editorWithCaret("");
+    editor.innerHTML = '<ruby class="word">日本語<rt contenteditable="false">にほんご</rt></ruby>です';
+    const base = editor.querySelector("ruby")!.firstChild!;
+    window.getSelection()!.setBaseAndExtent(base, offset, base, offset);
+    return editor;
+  }
+
+  it.each([
+    [0, "\n日本語です"],
+    [3, "日本語\nです"],
+  ])("inserts a break at a ruby's edge outside it, keeping its reading (offset %i)", (offset, text) => {
+    const editor = caretInRuby(offset);
+    insertEditorLineBreak(editor);
+    expect(editorText(editor)).toBe(text);
+    const ruby = editor.querySelector("ruby")!;
+    expect(ruby.querySelector("rt")!.textContent).toBe("にほんご");
+    expect(editorText(ruby)).toBe("日本語");
+  });
+
+  it("turns a ruby into plain text when inserting within its base", () => {
+    const editor = caretInRuby(1);
+    insertEditorLineBreak(editor);
+    expect(editor.querySelector("ruby")).toBeNull();
+    expect(editorText(editor)).toBe("日\n本語です");
+  });
 });
 
 describe("removeEditorLinks", () => {

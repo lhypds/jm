@@ -38,6 +38,32 @@ export function removeEditorLinks(editor: HTMLElement) {
   });
 }
 
+/**
+ * Keep inserted text out of a ruby's base. A break there does not wrap the line,
+ * so the text only moves down once the next annotation renders it. At either edge
+ * the caret steps outside the ruby; within it the ruby becomes plain text, since
+ * its reading no longer fits.
+ */
+function moveOutOfRuby(editor: HTMLElement, range: Range) {
+  const ruby = (range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement)
+    ?.closest("ruby");
+  if (!ruby || !editor.contains(ruby)) return;
+
+  const before = document.createRange();
+  before.selectNodeContents(ruby);
+  before.setEnd(range.startContainer, range.startOffset);
+  const offset = editorText(before.cloneContents()).length;
+  const base = editorText(ruby);
+  if (offset === 0) range.setStartBefore(ruby);
+  else if (offset >= base.length) range.setStartAfter(ruby);
+  else {
+    const plain = document.createTextNode(base);
+    ruby.replaceWith(plain);
+    range.setStart(plain, offset);
+  }
+  range.collapse(true);
+}
+
 /** Insert plain text without inheriting clipboard HTML or its font styles. */
 export function insertEditorText(editor: HTMLElement, text: string): boolean {
   const selection = window.getSelection();
@@ -46,6 +72,7 @@ export function insertEditorText(editor: HTMLElement, text: string): boolean {
   if (!editor.contains(range.startContainer) || !editor.contains(range.endContainer)) return false;
 
   range.deleteContents();
+  moveOutOfRuby(editor, range);
   const inserted = document.createTextNode(text.replace(/\r\n?/g, "\n"));
   range.insertNode(inserted);
 
