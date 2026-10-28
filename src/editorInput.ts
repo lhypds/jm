@@ -88,6 +88,11 @@ export function deleteEditorEmptyLastLine(editor: HTMLElement): boolean {
 
   placeholder.remove();
   lineBreak.deleteData(lineBreak.length - 1, 1);
+  // An earlier hard break now ends the text, so its empty line still needs the placeholder.
+  if (editorText(editor).endsWith("\n")) {
+    placeholder.setAttribute("data-editor-tail", "");
+    editor.append(placeholder);
+  }
   range.setStart(lineBreak, lineBreak.length);
   range.collapse(true);
   selection.removeAllRanges();

@@ -7,6 +7,7 @@
   height: 100vh;
   height: 100dvh;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 10vh clamp(20px, 6vw, 60px);
   cursor: text;
   touch-action: manipulation;
@@ -113,6 +114,13 @@ rt {
   font-weight: 400;
   line-height: 1;
   user-select: none;
+}
+
+/* WebKit stacks a reading on the base's full font box, which overflows the leading by a few pixels and pushes the line down; pull it back in. */
+@supports (font: -apple-system-body) {
+  rt {
+    margin-bottom: -0.25em;
+  }
 }
 
 @media (max-width: 600px) {

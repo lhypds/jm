@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from "vitest";
+import { adjacentStops } from "./editorCaret.ts";
 import {
   deleteEditorEmptyLastLine,
   deleteEditorRubyCharacter,
@@ -177,6 +178,18 @@ describe("deleteEditorEmptyLastLine", () => {
     expect(editorText(editor)).toBe("日本語");
     expect(editor.querySelector("br")).toBeNull();
     expect(deleteEditorEmptyLastLine(editor)).toBe(false);
+  });
+
+  it("keeps the placeholder when an earlier break leaves another empty last line", () => {
+    const editor = editorWithCaret("日本語");
+    insertEditorLineBreak(editor);
+    insertEditorLineBreak(editor);
+
+    expect(deleteEditorEmptyLastLine(editor)).toBe(true);
+    expect(editorText(editor)).toBe("日本語\n");
+    expect(editor.lastChild).toBeInstanceOf(HTMLBRElement);
+    expect(editor.querySelectorAll("[data-editor-tail]")).toHaveLength(1);
+    expect(adjacentStops(editor, window.getSelection()!.getRangeAt(0)).next?.node).toBe(editor.lastChild);
   });
 
   it("leaves a break before later text to the browser", () => {

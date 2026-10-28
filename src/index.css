@@ -25,6 +25,14 @@ body {
   background: #fff;
 }
 
+/* The page scrolls inside .page, so pin the document and stop iOS from rubber-banding it when nothing overflows. */
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 button,
 textarea {
   font: inherit;
