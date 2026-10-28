@@ -1,0 +1,50 @@
+{
+  "name": "jm",
+  "version": "0.1.0",
+  "description": "A clear view of Japanese text, in the browser and terminal.",
+  "type": "module",
+  "bin": {
+    "jm": "dist-cli/cli.js"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web \"tsx watch server/index.ts\" \"vite\"",
+    "dev:web": "vite",
+    "dev:api": "tsx watch server/index.ts",
+    "build": "tsc -b && vite build && tsup cli.ts --format esm --out-dir dist-cli --clean",
+    "start": "tsx server/index.ts",
+    "test": "vitest run",
+    "dictionary:update": "tsx scripts/update-loanwords.ts --latest",
+    "dictionary:rebuild": "tsx scripts/update-loanwords.ts",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "express": "^5.3.0",
+    "kuromoji": "^0.1.2",
+    "lucide-react": "^1.63.0",
+    "msedge-tts": "^2.1.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/express": "^5.0.6",
+    "@types/kuromoji": "^0.1.3",
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "concurrently": "^10.0.6",
+    "eslint": "^10.13.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.7",
+    "globals": "^17.13.0",
+    "happy-dom": "^21.0.4",
+    "tsup": "^9.0.0",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.0",
+    "typescript-eslint": "^8.72.0",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}

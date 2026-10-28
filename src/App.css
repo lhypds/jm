@@ -1,0 +1,122 @@
+/* Auto margins center the editor on screen, and let it grow downward and scroll once taller. */
+.page {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100vh;
+  height: 100dvh;
+  overflow-y: auto;
+  padding: 8vh clamp(20px, 6vw, 60px);
+  cursor: text;
+}
+
+.page[data-mode="normal"] {
+  cursor: default;
+}
+
+.page[data-layout="start"] {
+  align-items: stretch;
+  padding: 32px clamp(20px, 5vw, 60px);
+}
+
+.page[data-layout="start"] .paper {
+  max-width: none;
+  margin: 0;
+  text-align: left;
+}
+
+/* Shrink to the text so even an empty line's caret sits at the center. */
+.paper {
+  flex-shrink: 0;
+  max-width: min(100%, 716px);
+  min-height: 1lh;
+  margin: auto;
+  border: 0;
+  outline: 0;
+  color: #000;
+  background: #fff;
+  caret-color: transparent;
+  text-align: center;
+  font-size: 28px;
+  line-height: 2.25;
+  letter-spacing: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A blinking full-width block that inverts the character beneath it. */
+.caret {
+  position: absolute;
+  top: 0;
+  left: 0;
+  background: #fff;
+  mix-blend-mode: difference;
+  pointer-events: none;
+  animation: caret-blink 1s steps(1) infinite;
+}
+
+.caret[hidden] {
+  display: none;
+}
+
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.paper.multiline {
+  text-align: left;
+}
+
+/* The editor draws its own selection bands, so whole words invert across their reading's width. */
+.paper::selection,
+.paper ::selection {
+  color: #000;
+  background: transparent;
+}
+
+.selection-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.selection-band {
+  position: absolute;
+  top: 0;
+  left: 0;
+  background: #fff;
+  mix-blend-mode: difference;
+}
+
+ruby {
+  ruby-align: center;
+}
+
+.word {
+  cursor: pointer;
+}
+
+.paper:not(.selecting) .word:hover {
+  background-color: rgba(255, 255, 51, 0.4);
+}
+
+rt {
+  color: #000;
+  font-size: 0.48em;
+  font-weight: 400;
+  user-select: none;
+}
+
+@media (max-width: 600px) {
+  .page {
+    padding-block: 40px;
+  }
+
+  .paper {
+    font-size: 24px;
+  }
+}
