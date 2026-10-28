@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReadingSegment } from "../shared/types.ts";
-import { caretPoint, isAfterText, paragraphEndAtPoint, selectionBands } from "./editorCaret.ts";
+import {
+  caretOffset,
+  caretPoint,
+  caretPosition,
+  isAfterText,
+  paragraphEndAtPoint,
+  selectionBands,
+} from "./editorCaret.ts";
 import { editorText } from "./editorText.ts";
 import {
   deleteEditorEmptyLastLine,
@@ -8,45 +15,13 @@ import {
   insertEditorLineBreak,
   insertEditorText,
   removeEditorLinks,
+  removeStaleReadings,
 } from "./editorInput.ts";
 import { pronunciationText, pronounceJapanese, selectedPronunciation, stopPronunciation } from "./pronunciation.ts";
 import "./App.css";
 
 function sourceText(editor: HTMLElement) {
   return editorText(editor);
-}
-
-function caretOffset(editor: HTMLElement, node: Node, offset: number) {
-  const range = document.createRange();
-  range.selectNodeContents(editor);
-  range.setEnd(node, offset);
-  const content = range.cloneContents();
-  return editorText(content).length;
-}
-
-function caretPosition(editor: HTMLElement, offset: number): [Node, number] {
-  const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT, {
-    acceptNode(node) {
-      return node.parentElement?.closest("rt") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
-    },
-  });
-  let remaining = offset;
-  let node = walker.nextNode();
-
-  while (node) {
-    const length = node.textContent?.length ?? 0;
-    if (remaining <= length) {
-      // Keep the caret outside a ruby's non-editable reading at its boundary.
-      const ruby = node.parentElement;
-      if (remaining === length && ruby?.tagName === "RUBY" && ruby.parentNode) {
-        return [ruby.parentNode, Array.prototype.indexOf.call(ruby.parentNode.childNodes, ruby) + 1];
-      }
-      return [node, remaining];
-    }
-    remaining -= length;
-    node = walker.nextNode();
-  }
-  return [editor, editor.childNodes.length];
 }
 
 function renderReadings(editor: HTMLElement, segments: ReadingSegment[]) {
@@ -67,6 +42,8 @@ function renderReadings(editor: HTMLElement, segments: ReadingSegment[]) {
 
     const ruby = document.createElement("ruby");
     ruby.className = "word";
+    // Remember the annotated base, so an edit that bypasses our handlers can drop the stale reading.
+    ruby.dataset.base = segment.text;
     ruby.append(document.createTextNode(segment.text));
     const reading = document.createElement("rt");
     reading.contentEditable = "false";
@@ -479,11 +456,14 @@ function App() {
         }}
         onCompositionEnd={(event) => {
           composingRef.current = false;
+          removeStaleReadings(event.currentTarget);
           setText(sourceText(event.currentTarget));
         }}
         onInput={(event) => {
           removeEditorLinks(event.currentTarget);
-          if (!composingRef.current) setText(sourceText(event.currentTarget));
+          if (composingRef.current) return;
+          removeStaleReadings(event.currentTarget);
+          setText(sourceText(event.currentTarget));
         }}
       />
       <div ref={highlightsRef} className="selection-layer" aria-hidden="true" />

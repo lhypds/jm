@@ -1,3 +1,5 @@
+import { editorText } from "./editorText.ts";
+
 export type Stop = { node: Text; index: number } | { node: HTMLBRElement };
 
 /** Visible caret stops in document order, skipping ruby readings. */
@@ -134,4 +136,39 @@ export function caretPoint(editor: HTMLElement, range: Range): { x: number; y: n
   const style = getComputedStyle(editor);
   const x = style.textAlign === "center" ? rect.left + rect.width / 2 - parseFloat(style.fontSize) / 2 : rect.left;
   return { x, y: rect.top + rect.height / 2 };
+}
+
+/** The caret's offset in the editor's source text, ignoring ruby readings. */
+export function caretOffset(editor: HTMLElement, node: Node, offset: number) {
+  const range = document.createRange();
+  range.selectNodeContents(editor);
+  range.setEnd(node, offset);
+  const content = range.cloneContents();
+  return editorText(content).length;
+}
+
+/** The DOM point for a source-text offset, kept outside ruby readings. */
+export function caretPosition(editor: HTMLElement, offset: number): [Node, number] {
+  const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      return node.parentElement?.closest("rt") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  let remaining = offset;
+  let node = walker.nextNode();
+
+  while (node) {
+    const length = node.textContent?.length ?? 0;
+    if (remaining <= length) {
+      // Keep the caret outside a ruby's non-editable reading at its boundary.
+      const ruby = node.parentElement;
+      if (remaining === length && ruby?.tagName === "RUBY" && ruby.parentNode) {
+        return [ruby.parentNode, Array.prototype.indexOf.call(ruby.parentNode.childNodes, ruby) + 1];
+      }
+      return [node, remaining];
+    }
+    remaining -= length;
+    node = walker.nextNode();
+  }
+  return [editor, editor.childNodes.length];
 }
