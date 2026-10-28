@@ -7,7 +7,6 @@ import {
   insertEditorLineBreak,
   insertEditorText,
   removeEditorLinks,
-  removeStaleReadings,
 } from "./editorInput.ts";
 import { editorText } from "./editorText.ts";
 
@@ -139,6 +138,39 @@ describe("deleteEditorRubyCharacter", () => {
     expect(selection.anchorOffset).toBe(1);
   });
 
+  it("leaves a placeholder line when deleting the last character empties the editor", () => {
+    const editor = document.createElement("main");
+    editor.contentEditable = "true";
+    editor.innerHTML = '<ruby class="word">情<rt contenteditable="false">じょう</rt></ruby>';
+    document.body.append(editor);
+    const range = document.createRange();
+    range.setStart(editor, 1);
+    window.getSelection()?.addRange(range);
+
+    expect(deleteEditorRubyCharacter(editor, "backward")).toBe(true);
+    expect(editor.innerHTML).toBe('<br data-editor-tail="">');
+    expect(editorText(editor)).toBe("");
+    const selection = window.getSelection()!;
+    expect(selection.anchorNode).toBe(editor);
+    expect(selection.anchorOffset).toBe(0);
+  });
+
+  it("keeps an emptied last line in place after deleting its only word", () => {
+    const editor = document.createElement("main");
+    editor.contentEditable = "true";
+    editor.innerHTML = '私は\n<ruby class="word">情<rt contenteditable="false">じょう</rt></ruby>';
+    document.body.append(editor);
+    const range = document.createRange();
+    range.setStart(editor, 2);
+    window.getSelection()?.addRange(range);
+
+    expect(deleteEditorRubyCharacter(editor, "backward")).toBe(true);
+    expect(editorText(editor)).toBe("私は\n");
+    expect(editor.lastChild).toBeInstanceOf(HTMLBRElement);
+    expect(editor.querySelectorAll("[data-editor-tail]")).toHaveLength(1);
+    expect(adjacentStops(editor, window.getSelection()!.getRangeAt(0)).next?.node).toBe(editor.lastChild);
+  });
+
   it("deletes forward from inside a ruby", () => {
     const editor = rubyEditor((editor) => [editor.querySelector("ruby")!.firstChild!, 1]);
     expect(deleteEditorRubyCharacter(editor, "forward")).toBe(true);
@@ -196,53 +228,5 @@ describe("deleteEditorEmptyLastLine", () => {
   it("leaves a break before later text to the browser", () => {
     const editor = editorWithCaret("日本語\n東京");
     expect(deleteEditorEmptyLastLine(editor)).toBe(false);
-  });
-});
-
-describe("removeStaleReadings", () => {
-  function editorWith(html: string, caretText: string, caretOffset: number) {
-    const editor = document.createElement("main");
-    editor.contentEditable = "true";
-    editor.innerHTML = html;
-    document.body.append(editor);
-    const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
-    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      if (node.textContent === caretText && !node.parentElement?.closest("rt")) {
-        const range = document.createRange();
-        range.setStart(node, caretOffset);
-        window.getSelection()?.addRange(range);
-        break;
-      }
-    }
-    return editor;
-  }
-
-  it("removes a reading left above deleted base text", () => {
-    const editor = editorWith('<ruby class="word" data-base="情"><rt contenteditable="false">じょう</rt></ruby>', "", 0);
-    expect(removeStaleReadings(editor)).toBe(true);
-    expect(editor.innerHTML).toBe("");
-  });
-
-  it("turns a partly deleted word into plain text and keeps the caret", () => {
-    const editor = editorWith(
-      '私は<ruby class="word" data-base="情報">情<rt contenteditable="false">じょうほう</rt></ruby>です',
-      "情",
-      1,
-    );
-    expect(removeStaleReadings(editor)).toBe(true);
-    expect(editor.querySelector("rt")).toBeNull();
-    expect(editorText(editor)).toBe("私は情です");
-    const selection = window.getSelection()!;
-    const range = document.createRange();
-    range.selectNodeContents(editor);
-    range.setEnd(selection.anchorNode!, selection.anchorOffset);
-    expect(editorText(range.cloneContents())).toBe("私は情");
-  });
-
-  it("leaves intact words alone", () => {
-    const html = '<ruby class="word" data-base="情報">情報<rt contenteditable="false">じょうほう</rt></ruby>';
-    const editor = editorWith(html, "情報", 2);
-    expect(removeStaleReadings(editor)).toBe(false);
-    expect(editor.innerHTML).toBe(html);
   });
 });

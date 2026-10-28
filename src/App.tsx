@@ -15,22 +15,12 @@ import {
   insertEditorLineBreak,
   insertEditorText,
   removeEditorLinks,
-  removeStaleReadings,
 } from "./editorInput.ts";
 import { pronunciationText, pronounceJapanese, selectedPronunciation, stopPronunciation } from "./pronunciation.ts";
 import "./App.css";
 
 function sourceText(editor: HTMLElement) {
   return editorText(editor);
-}
-
-/**
- * iOS WebKit can leave a removed ruby's reading painted after a scripted edit, so
- * nudge the editor's paint for one frame to clear it.
- */
-function repaint(editor: HTMLElement) {
-  editor.classList.add("repaint");
-  requestAnimationFrame(() => editor.classList.remove("repaint"));
 }
 
 function renderReadings(editor: HTMLElement, segments: ReadingSegment[]) {
@@ -51,8 +41,6 @@ function renderReadings(editor: HTMLElement, segments: ReadingSegment[]) {
 
     const ruby = document.createElement("ruby");
     ruby.className = "word";
-    // Remember the annotated base, so an edit that bypasses our handlers can drop the stale reading.
-    ruby.dataset.base = segment.text;
     ruby.append(document.createTextNode(segment.text));
     const reading = document.createElement("rt");
     reading.contentEditable = "false";
@@ -155,7 +143,6 @@ function App() {
         if (!insertEditorLineBreak(editor)) return;
       } else return;
       event.preventDefault();
-      repaint(editor);
       setText(sourceText(editor));
     }
 
@@ -466,14 +453,11 @@ function App() {
         }}
         onCompositionEnd={(event) => {
           composingRef.current = false;
-          removeStaleReadings(event.currentTarget);
           setText(sourceText(event.currentTarget));
         }}
         onInput={(event) => {
           removeEditorLinks(event.currentTarget);
-          if (composingRef.current) return;
-          removeStaleReadings(event.currentTarget);
-          setText(sourceText(event.currentTarget));
+          if (!composingRef.current) setText(sourceText(event.currentTarget));
         }}
       />
       <div ref={highlightsRef} className="selection-layer" aria-hidden="true" />

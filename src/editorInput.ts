@@ -1,4 +1,4 @@
-import { adjacentStops, caretOffset, caretPosition } from "./editorCaret.ts";
+import { adjacentStops } from "./editorCaret.ts";
 import { editorText } from "./editorText.ts";
 
 /** Remove imported formatting and links while retaining their editable text. */
@@ -141,45 +141,18 @@ export function deleteEditorRubyCharacter(editor: HTMLElement, direction: "backw
   } else {
     ruby.remove();
     range.setStart(parent, index);
-    if (!editor.hasChildNodes()) { editor.append(document.createElement("br")); range.setStart(editor, 0); } // EXP
+    // An emptied editor or last line needs its placeholder, as after a typed break.
+    // Without it the empty line collapses, so the caret jumps up a line until the
+    // next annotation, and iOS WebKit leaves the removed reading painted.
+    const text = editorText(editor);
+    if ((!text || text.endsWith("\n")) && !editor.querySelector("[data-editor-tail]")) {
+      const tail = document.createElement("br");
+      tail.setAttribute("data-editor-tail", "");
+      editor.append(tail);
+    }
   }
   range.collapse(true);
   selection.removeAllRanges();
   selection.addRange(range);
-  return true;
-}
-
-/**
- * Turn rubies whose base text no longer matches its annotation into plain text.
- * Some keyboards, like those on iOS, delete without a cancelable beforeinput, so the
- * browser removes the base text but keeps the non-editable reading above nothing.
- */
-export function removeStaleReadings(editor: HTMLElement): boolean {
-  const stale = Array.from(editor.querySelectorAll<HTMLElement>("ruby")).filter((ruby) => {
-    const base = editorText(ruby);
-    return !base || (ruby.dataset.base !== undefined && base !== ruby.dataset.base);
-  });
-  if (!stale.length) return false;
-
-  const selection = window.getSelection();
-  const anchor = selection?.anchorNode;
-  const focus = selection?.focusNode;
-  const saved =
-    selection && anchor && focus && editor.contains(anchor) && editor.contains(focus)
-      ? [caretOffset(editor, anchor, selection.anchorOffset), caretOffset(editor, focus, selection.focusOffset)]
-      : null;
-
-  for (const ruby of stale) {
-    const base = editorText(ruby);
-    if (base) ruby.replaceWith(document.createTextNode(base));
-    else ruby.remove();
-  }
-  editor.normalize();
-
-  if (saved) {
-    const [anchorNode, anchorOffset] = caretPosition(editor, saved[0]);
-    const [focusNode, focusOffset] = caretPosition(editor, saved[1]);
-    selection?.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset);
-  }
   return true;
 }

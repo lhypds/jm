@@ -68,11 +68,6 @@
   }
 }
 
-/* A colour change that cannot be seen, used only to make iOS repaint the editor. */
-.paper.repaint {
-  color: #010101;
-}
-
 .paper.multiline {
   text-align: left;
 }
@@ -121,9 +116,10 @@ rt {
   user-select: none;
 }
 
-/* WebKit stacks a reading on the base's full font box, which overflows the leading by a few pixels and pushes the line down; pull it back in. */
+/* WebKit stacks a reading on the base's full font box and reserves its full height, which overflows the leading and pushes the line down; pull it back in. The top margin covers lines after the first, where the previous line limits the room. */
 @supports (font: -apple-system-body) {
   rt {
+    margin-top: -0.3em;
     margin-bottom: -0.25em;
   }
 }
