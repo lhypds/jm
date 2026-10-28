@@ -141,6 +141,7 @@ export function deleteEditorRubyCharacter(editor: HTMLElement, direction: "backw
   } else {
     ruby.remove();
     range.setStart(parent, index);
+    if (!editor.hasChildNodes()) { editor.append(document.createElement("br")); range.setStart(editor, 0); } // EXP
   }
   range.collapse(true);
   selection.removeAllRanges();

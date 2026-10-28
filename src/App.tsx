@@ -24,6 +24,15 @@ function sourceText(editor: HTMLElement) {
   return editorText(editor);
 }
 
+/**
+ * iOS WebKit can leave a removed ruby's reading painted after a scripted edit, so
+ * nudge the editor's paint for one frame to clear it.
+ */
+function repaint(editor: HTMLElement) {
+  editor.classList.add("repaint");
+  requestAnimationFrame(() => editor.classList.remove("repaint"));
+}
+
 function renderReadings(editor: HTMLElement, segments: ReadingSegment[]) {
   const fragment = document.createDocumentFragment();
 
@@ -146,6 +155,7 @@ function App() {
         if (!insertEditorLineBreak(editor)) return;
       } else return;
       event.preventDefault();
+      repaint(editor);
       setText(sourceText(editor));
     }
 

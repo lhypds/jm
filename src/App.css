@@ -68,6 +68,11 @@
   }
 }
 
+/* A colour change that cannot be seen, used only to make iOS repaint the editor. */
+.paper.repaint {
+  color: #010101;
+}
+
 .paper.multiline {
   text-align: left;
 }
