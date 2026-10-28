@@ -21,7 +21,7 @@ module.exports = {
   apps: [
     {
       name: PM2_NAME,
-      script: 'npm',
+      script: 'pnpm',
       args: 'start',
       cwd: __dirname,
       time: true,

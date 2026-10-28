@@ -17,12 +17,19 @@ if ! command -v pm2 &> /dev/null; then
   npm install -g pm2
 fi
 
+# Install pnpm globally if not present
+if ! command -v pnpm &> /dev/null; then
+  echo "Installing pnpm..."
+  npm install -g pnpm@10.33.0
+fi
+
 cd "$ROOT"
 echo "Installing dependencies..."
-npm install
+# Building and `pnpm start` need devDependencies (typescript, vite, tsup, tsx), even when NODE_ENV=production.
+pnpm install --frozen-lockfile --prod=false
 
 echo "Building..."
-npm run build
+pnpm run build
 
 echo ""
 echo "Setup complete."

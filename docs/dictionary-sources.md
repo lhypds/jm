@@ -34,13 +34,13 @@ paper surface; the latter have an “English meaning” tooltip.
 
 ## Updates
 
-Run `npm run dictionary:update` to download the newest full English JMdict release
+Run `pnpm run dictionary:update` to download the newest full English JMdict release
 and regenerate the dataset and licence documentation. This edition also includes
 non-English borrowing-source metadata. Normal app/CLI use does not access the
 network. Keep publicly deployed dictionary data current; EDRDG asks web dictionary
 servers to update at least monthly.
 
-Run `npm run dictionary:rebuild` to reproduce the pinned snapshot. The generator
+Run `pnpm run dictionary:rebuild` to reproduce the pinned snapshot. The generator
 requires Node.js and the `unzip` command (available by default on macOS). Optional
 `JM_JMDICT_ARCHIVE` points to a previously downloaded ZIP; its digest is checked
 against release metadata when provided by GitHub.

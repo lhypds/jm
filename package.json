@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "A clear view of Japanese text, in the browser and terminal.",
   "type": "module",
+  "packageManager": "pnpm@10.33.0",
   "bin": {
     "jm": "dist-cli/cli.js"
   },
@@ -46,5 +47,13 @@
     "typescript-eslint": "^8.72.0",
     "vite": "^8.3.5",
     "vitest": "^5.0.5"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ],
+    "ignoredBuiltDependencies": [
+      "msedge-tts"
+    ]
   }
 }

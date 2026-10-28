@@ -56,7 +56,7 @@ These fallback annotations have an “English meaning” tooltip and `readingKin
 
 The main vocabulary is [server/data/loanwords.json](../server/data/loanwords.json).
 It is generated from JMdict; do not edit thousands of entries by hand. Run
-`npm run dictionary:update` for the latest release, or `npm run dictionary:rebuild`
+`pnpm run dictionary:update` for the latest release, or `pnpm run dictionary:rebuild`
 for the pinned snapshot. Review the generated diff and run tests after updating.
 
 For a manually verified correction, add an entry to `overrides` in
