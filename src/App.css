@@ -104,8 +104,11 @@ ruby {
   cursor: pointer;
 }
 
-.paper:not(.selecting) .word:hover {
-  background-color: rgba(255, 255, 51, 0.4);
+/* Only for real pointers: touch browsers leave a tapped word in :hover, which looked like a stray highlight. */
+@media (hover: hover) {
+  .paper:not(.selecting) .word:hover {
+    background-color: rgba(255, 255, 51, 0.4);
+  }
 }
 
 rt {

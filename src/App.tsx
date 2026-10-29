@@ -85,6 +85,18 @@ function paintSelection(editor: HTMLElement, layer: HTMLElement, range: Range | 
   );
 }
 
+/** The editor's selection when a viewport point lies on its painted bands, or null. */
+function selectionAtPoint(editor: HTMLElement, x: number, y: number) {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || !selection.rangeCount) return null;
+  const range = selection.getRangeAt(0);
+  if (!editor.contains(range.commonAncestorContainer)) return null;
+  const inside = selectionBands(editor, range).some(
+    (band) => x >= band.left && x <= band.right && y >= band.top && y <= band.bottom,
+  );
+  return inside ? range : null;
+}
+
 function placeOverlays(editor: HTMLElement, caret: HTMLElement, highlights: HTMLElement) {
   const selection = window.getSelection();
   const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
@@ -330,12 +342,21 @@ function App() {
     // On touch screens, one finger dragged across the text selects it rather than scrolling;
     // a drag from the blank margins, or with two fingers, still scrolls.
     let start: { x: number; y: number; offset: number } | null = null;
+    // A tap on the selection reads it, without the native callout menu or collapsing it into a single word.
+    let selectedText: string | null = null;
 
     function handleTouchStart(event: TouchEvent) {
       start = null;
+      selectedText = null;
       if (!editor || event.touches.length !== 1 || composingRef.current) return;
       if (!(event.target instanceof Node) || !editor.contains(event.target)) return;
       const touch = event.touches[0];
+      const selected = selectionAtPoint(editor, touch.clientX, touch.clientY);
+      if (selected) {
+        // Also suppresses the emulated mouse events, so the editor keeps focus and the keyboard stays open.
+        event.preventDefault();
+        selectedText = selectedPronunciation(selected);
+      }
       const range = caretRangeAtPoint(editor, touch.clientX, touch.clientY);
       if (range) {
         start = {
@@ -356,6 +377,7 @@ function App() {
       const touch = event.touches[0];
       // Leave small jitters as taps, which read words aloud.
       if (Math.hypot(touch.clientX - start.x, touch.clientY - start.y) < 8) return;
+      selectedText = null;
 
       // Scroll while the finger is near the top or bottom edge, so the selection can grow past the screen.
       const bounds = page.getBoundingClientRect();
@@ -373,11 +395,13 @@ function App() {
       window.getSelection()?.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset);
     }
 
-    function handleTouchEnd() {
+    function handleTouchEnd(event: TouchEvent) {
+      if (selectedText && event.type === "touchend") pronounceJapanese(selectedText);
       start = null;
+      selectedText = null;
     }
 
-    page.addEventListener("touchstart", handleTouchStart, { passive: true });
+    page.addEventListener("touchstart", handleTouchStart, { passive: false });
     page.addEventListener("touchmove", handleTouchMove, { passive: false });
     page.addEventListener("touchend", handleTouchEnd);
     page.addEventListener("touchcancel", handleTouchEnd);
@@ -471,18 +495,8 @@ function App() {
         onMouseDown={(event) => {
           selectedPlaybackRef.current = null;
           if (event.button !== 0 || event.detail > 1 || composingRef.current) return;
-          const selection = window.getSelection();
-          if (!selection || selection.isCollapsed || !selection.rangeCount) return;
-          const range = selection.getRangeAt(0);
-          if (!event.currentTarget.contains(range.commonAncestorContainer)) return;
-          const inside = Array.from(range.getClientRects()).some(
-            (rect) =>
-              event.clientX >= rect.left &&
-              event.clientX <= rect.right &&
-              event.clientY >= rect.top &&
-              event.clientY <= rect.bottom,
-          );
-          if (!inside) return;
+          const range = selectionAtPoint(event.currentTarget, event.clientX, event.clientY);
+          if (!range) return;
           event.preventDefault();
           selectedPlaybackRef.current = selectedPronunciation(range);
         }}
