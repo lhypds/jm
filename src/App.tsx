@@ -229,11 +229,13 @@ function App() {
     const editor = editorRef.current;
     if (!editor || !caretRef.current || !highlightsRef.current) return;
     const correction = correctionRef.current;
+    // Some input methods select the text being composed; only a selection the user made gets the tools.
+    if (composingRef.current && toolbarRef.current) toolbarRef.current.hidden = true;
     placeOverlays(
       editor,
       caretRef.current,
       highlightsRef.current,
-      correction ? null : toolbarRef.current,
+      correction || composingRef.current ? null : toolbarRef.current,
       correction?.offsets ?? touchSelectionRef.current,
     );
   }, []);
@@ -696,10 +698,12 @@ function App() {
         }}
         onCompositionStart={() => {
           composingRef.current = true;
+          repaintOverlays();
         }}
         onCompositionEnd={(event) => {
           composingRef.current = false;
           setText(sourceText(event.currentTarget));
+          repaintOverlays();
         }}
         onInput={(event) => {
           // Typing goes to the caret, so a touch selection would no longer match the text.
