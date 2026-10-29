@@ -85,21 +85,41 @@ function paintSelection(editor: HTMLElement, layer: HTMLElement, range: Range | 
   );
 }
 
-/** The editor's selection when a viewport point lies on its painted bands, or null. */
+/** The window selection when a viewport point lies on its painted bands, or null. */
 function selectionAtPoint(editor: HTMLElement, x: number, y: number) {
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || !selection.rangeCount) return null;
   const range = selection.getRangeAt(0);
   if (!editor.contains(range.commonAncestorContainer)) return null;
-  const inside = selectionBands(editor, range).some(
-    (band) => x >= band.left && x <= band.right && y >= band.top && y <= band.bottom,
-  );
-  return inside ? range : null;
+  return isOnRange(editor, range, x, y) ? range : null;
 }
 
-function placeOverlays(editor: HTMLElement, caret: HTMLElement, highlights: HTMLElement) {
+function isOnRange(editor: HTMLElement, range: Range, x: number, y: number) {
+  return selectionBands(editor, range).some(
+    (band) => x >= band.left && x <= band.right && y >= band.top && y <= band.bottom,
+  );
+}
+
+/** A range between two source offsets, in either order. */
+function offsetRange(editor: HTMLElement, [anchor, focus]: [number, number]) {
+  const range = document.createRange();
+  range.setStart(...caretPosition(editor, Math.min(anchor, focus)));
+  range.setEnd(...caretPosition(editor, Math.max(anchor, focus)));
+  return range;
+}
+
+function placeOverlays(
+  editor: HTMLElement,
+  caret: HTMLElement,
+  highlights: HTMLElement,
+  touchSelection: [number, number] | null,
+) {
   const selection = window.getSelection();
-  const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+  const range = touchSelection
+    ? offsetRange(editor, touchSelection)
+    : selection?.rangeCount
+      ? selection.getRangeAt(0)
+      : null;
   paintSelection(editor, highlights, range);
   if (
     document.activeElement !== editor ||
@@ -129,6 +149,8 @@ function App() {
   const caretRef = useRef<HTMLDivElement>(null);
   const highlightsRef = useRef<HTMLDivElement>(null);
   const composingRef = useRef(false);
+  // Touch screens keep the app's own selection, as source offsets, so the system's never shows.
+  const touchSelectionRef = useRef<[number, number] | null>(null);
   const selectedPlaybackRef = useRef<string | null>(null);
   // Like vim: normal mode only reads text aloud, and i or a returns to insert mode.
   const [mode, setMode] = useState<"insert" | "normal">("insert");
@@ -176,7 +198,7 @@ function App() {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         if (editor && caretRef.current && highlightsRef.current)
-          placeOverlays(editor, caretRef.current, highlightsRef.current);
+          placeOverlays(editor, caretRef.current, highlightsRef.current, touchSelectionRef.current);
       });
     }
     // Center a single line, but align longer text to the left. Alignment never changes the width, so this settles.
@@ -222,29 +244,15 @@ function App() {
           return response.json() as Promise<{ segments: ReadingSegment[] }>;
         })
         .then(({ segments }) => {
-          const editor = editorRef.current;
-          if (!editor || controller.signal.aborted || composingRef.current || sourceText(editor) !== text) return;
-
-          const focused = document.activeElement === editor;
-          const selection = window.getSelection();
-          const anchor = selection?.anchorNode;
-          const focus = selection?.focusNode;
-          const savedSelection =
-            focused && anchor && focus && editor.contains(anchor) && editor.contains(focus)
-              ? [caretOffset(editor, anchor, selection.anchorOffset), caretOffset(editor, focus, selection.focusOffset)]
-              : null;
-
-          renderReadings(editor, segments);
-
-          if (focused) {
-            editor.focus({ preventScroll: true });
-            if (savedSelection) {
-              const [anchorNode, anchorOffset] = caretPosition(editor, savedSelection[0]);
-              const [focusNode, focusOffset] = caretPosition(editor, savedSelection[1]);
-              window.getSelection()?.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset);
-            }
+          // A system dialog such as Android's input method picker has the window. Rebuilding the editor
+          // while the input method reconnects closes the keyboard, so wait until the page has focus again.
+          if (!document.hasFocus()) {
+            const resume = () => applySegments(segments);
+            window.addEventListener("focus", resume, { once: true });
+            controller.signal.addEventListener("abort", () => window.removeEventListener("focus", resume));
+            return;
           }
-          if (caretRef.current && highlightsRef.current) placeOverlays(editor, caretRef.current, highlightsRef.current);
+          applySegments(segments);
         })
         .catch((error: unknown) => {
           if (!(error instanceof DOMException && error.name === "AbortError")) {
@@ -252,6 +260,33 @@ function App() {
           }
         });
     }, 120);
+
+    function applySegments(segments: ReadingSegment[]) {
+      const editor = editorRef.current;
+      if (!editor || controller.signal.aborted || composingRef.current || sourceText(editor) !== text) return;
+
+      const focused = document.activeElement === editor;
+      const selection = window.getSelection();
+      const anchor = selection?.anchorNode;
+      const focus = selection?.focusNode;
+      const savedSelection =
+        focused && anchor && focus && editor.contains(anchor) && editor.contains(focus)
+          ? [caretOffset(editor, anchor, selection.anchorOffset), caretOffset(editor, focus, selection.focusOffset)]
+          : null;
+
+      renderReadings(editor, segments);
+
+      if (focused) {
+        editor.focus({ preventScroll: true });
+        if (savedSelection) {
+          const [anchorNode, anchorOffset] = caretPosition(editor, savedSelection[0]);
+          const [focusNode, focusOffset] = caretPosition(editor, savedSelection[1]);
+          window.getSelection()?.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset);
+        }
+      }
+      if (caretRef.current && highlightsRef.current)
+        placeOverlays(editor, caretRef.current, highlightsRef.current, touchSelectionRef.current);
+    }
 
     return () => {
       window.clearTimeout(timer);
@@ -339,45 +374,56 @@ function App() {
     const editor = editorRef.current;
     if (!page || !editor) return;
 
-    // On touch screens, one finger dragged across the text selects it rather than scrolling;
-    // a drag from the blank margins, or with two fingers, still scrolls.
-    let start: { x: number; y: number; offset: number } | null = null;
-    // A tap on the selection reads it, without the native callout menu or collapsing it into a single word.
-    let selectedText: string | null = null;
+    // On touch screens the app handles every touch on the text itself, so the system's selection, handles,
+    // magnifier and Cut/Copy menu never appear. One finger dragged across the text selects it, a tap on that
+    // selection reads it, and two fingers scroll; a drag from the blank margins still scrolls natively.
+    let start: { x: number; y: number; offset: number; target: Element; dragged: boolean } | null = null;
+    let scrollY: number | null = null;
+
+    function repaint() {
+      if (editor && caretRef.current && highlightsRef.current)
+        placeOverlays(editor, caretRef.current, highlightsRef.current, touchSelectionRef.current);
+    }
 
     function handleTouchStart(event: TouchEvent) {
+      if (start && event.touches.length === 2) {
+        start = null;
+        scrollY = (event.touches[0].clientY + event.touches[1].clientY) / 2;
+        return;
+      }
       start = null;
-      selectedText = null;
+      scrollY = null;
       if (!editor || event.touches.length !== 1 || composingRef.current) return;
-      if (!(event.target instanceof Node) || !editor.contains(event.target)) return;
+      if (!(event.target instanceof Element) || !editor.contains(event.target)) return;
       const touch = event.touches[0];
-      const selected = selectionAtPoint(editor, touch.clientX, touch.clientY);
-      if (selected) {
-        // Also suppresses the emulated mouse events, so the editor keeps focus and the keyboard stays open.
-        event.preventDefault();
-        selectedText = selectedPronunciation(selected);
-      }
       const range = caretRangeAtPoint(editor, touch.clientX, touch.clientY);
-      if (range) {
-        start = {
-          x: touch.clientX,
-          y: touch.clientY,
-          offset: caretOffset(editor, range.startContainer, range.startOffset),
-        };
-      }
+      if (!range) return;
+      // Cancelling the touch also keeps the editor's focus, so an open keyboard stays open.
+      event.preventDefault();
+      start = {
+        x: touch.clientX,
+        y: touch.clientY,
+        offset: caretOffset(editor, range.startContainer, range.startOffset),
+        target: event.target,
+        dragged: false,
+      };
     }
 
     function handleTouchMove(event: TouchEvent) {
-      if (!start || !page || !editor) return;
-      if (event.touches.length !== 1) {
-        start = null;
+      if (!page || !editor) return;
+      if (scrollY !== null && event.touches.length === 2) {
+        event.preventDefault();
+        const y = (event.touches[0].clientY + event.touches[1].clientY) / 2;
+        page.scrollTop += scrollY - y;
+        scrollY = y;
         return;
       }
+      if (!start || event.touches.length !== 1) return;
       event.preventDefault();
       const touch = event.touches[0];
       // Leave small jitters as taps, which read words aloud.
-      if (Math.hypot(touch.clientX - start.x, touch.clientY - start.y) < 8) return;
-      selectedText = null;
+      if (!start.dragged && Math.hypot(touch.clientX - start.x, touch.clientY - start.y) < 8) return;
+      start.dragged = true;
 
       // Scroll while the finger is near the top or bottom edge, so the selection can grow past the screen.
       const bounds = page.getBoundingClientRect();
@@ -387,18 +433,41 @@ function App() {
 
       const range = caretRangeAtPoint(editor, touch.clientX, touch.clientY);
       if (!range) return;
-      const [anchorNode, anchorOffset] = caretPosition(editor, start.offset);
-      const [focusNode, focusOffset] = caretPosition(
-        editor,
-        caretOffset(editor, range.startContainer, range.startOffset),
-      );
-      window.getSelection()?.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset);
+      touchSelectionRef.current = [start.offset, caretOffset(editor, range.startContainer, range.startOffset)];
+      repaint();
     }
 
     function handleTouchEnd(event: TouchEvent) {
-      if (selectedText && event.type === "touchend") pronounceJapanese(selectedText);
+      const tap = start && !start.dragged && event.type === "touchend" ? start : null;
       start = null;
-      selectedText = null;
+      if (event.touches.length < 2) scrollY = null;
+      if (!tap || !editor) return;
+      const { clientX, clientY } = event.changedTouches[0];
+
+      // A tap on the selection reads it; a tap anywhere else clears it.
+      if (touchSelectionRef.current) {
+        const range = offsetRange(editor, touchSelectionRef.current);
+        if (isOnRange(editor, range, clientX, clientY)) {
+          pronounceJapanese(selectedPronunciation(range));
+          return;
+        }
+        touchSelectionRef.current = null;
+        repaint();
+      }
+
+      // The cancelled touch produces no click, so replay it: tapping a word reads it, and tapping
+      // other text while writing moves the caret there, as the browser would have.
+      if (editor.isContentEditable && !tap.target.closest(".word")) {
+        const range = caretRangeAtPoint(editor, clientX, clientY);
+        editor.focus({ preventScroll: true });
+        if (range)
+          window.getSelection()?.setBaseAndExtent(range.startContainer, range.startOffset, range.startContainer, range.startOffset);
+      }
+      for (const type of ["mousedown", "mouseup", "click"]) {
+        tap.target.dispatchEvent(
+          new MouseEvent(type, { bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 1 }),
+        );
+      }
     }
 
     page.addEventListener("touchstart", handleTouchStart, { passive: false });
@@ -415,7 +484,7 @@ function App() {
 
   useEffect(() => {
     if (editorRef.current && caretRef.current && highlightsRef.current)
-      placeOverlays(editorRef.current, caretRef.current, highlightsRef.current);
+      placeOverlays(editorRef.current, caretRef.current, highlightsRef.current, touchSelectionRef.current);
   }, [layout]);
 
   return (
@@ -540,6 +609,8 @@ function App() {
           setText(sourceText(event.currentTarget));
         }}
         onInput={(event) => {
+          // Typing goes to the caret, so a touch selection would no longer match the text.
+          touchSelectionRef.current = null;
           removeEditorLinks(event.currentTarget);
           if (!composingRef.current) setText(sourceText(event.currentTarget));
         }}
