@@ -37,11 +37,8 @@ export function adjacentStops(editor: HTMLElement, range: Range): { previous?: S
   return { previous: stops[(after === -1 ? stops.length : after) - 1], next: after === -1 ? undefined : stops[after] };
 }
 
-/**
- * The caret position at the end of a paragraph or on an empty line when a viewport
- * point lies in the blank space after it, or null for points on or within text.
- */
-export function paragraphEndAtPoint(editor: HTMLElement, x: number, y: number): Range | null {
+/** The collapsed caret range nearest a viewport point, or null outside the editor. */
+export function caretRangeAtPoint(editor: HTMLElement, x: number, y: number): Range | null {
   let range: Range | null = null;
   if (document.caretPositionFromPoint) {
     const position = document.caretPositionFromPoint(x, y);
@@ -54,6 +51,16 @@ export function paragraphEndAtPoint(editor: HTMLElement, x: number, y: number): 
   }
   if (!range || !editor.contains(range.startContainer)) return null;
   range.collapse(true);
+  return range;
+}
+
+/**
+ * The caret position at the end of a paragraph or on an empty line when a viewport
+ * point lies in the blank space after it, or null for points on or within text.
+ */
+export function paragraphEndAtPoint(editor: HTMLElement, x: number, y: number): Range | null {
+  const range = caretRangeAtPoint(editor, x, y);
+  if (!range) return null;
 
   const { previous, next } = adjacentStops(editor, range);
   if (next && !isLineBreak(next)) return null;

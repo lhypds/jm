@@ -4,6 +4,7 @@ import {
   caretOffset,
   caretPoint,
   caretPosition,
+  caretRangeAtPoint,
   isAfterText,
   paragraphEndAtPoint,
   selectionBands,
@@ -111,6 +112,7 @@ function placeOverlays(editor: HTMLElement, caret: HTMLElement, highlights: HTML
 }
 
 function App() {
+  const pageRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLElement>(null);
   const caretRef = useRef<HTMLDivElement>(null);
   const highlightsRef = useRef<HTMLDivElement>(null);
@@ -321,12 +323,80 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const page = pageRef.current;
+    const editor = editorRef.current;
+    if (!page || !editor) return;
+
+    // On touch screens, one finger dragged across the text selects it rather than scrolling;
+    // a drag from the blank margins, or with two fingers, still scrolls.
+    let start: { x: number; y: number; offset: number } | null = null;
+
+    function handleTouchStart(event: TouchEvent) {
+      start = null;
+      if (!editor || event.touches.length !== 1 || composingRef.current) return;
+      if (!(event.target instanceof Node) || !editor.contains(event.target)) return;
+      const touch = event.touches[0];
+      const range = caretRangeAtPoint(editor, touch.clientX, touch.clientY);
+      if (range) {
+        start = {
+          x: touch.clientX,
+          y: touch.clientY,
+          offset: caretOffset(editor, range.startContainer, range.startOffset),
+        };
+      }
+    }
+
+    function handleTouchMove(event: TouchEvent) {
+      if (!start || !page || !editor) return;
+      if (event.touches.length !== 1) {
+        start = null;
+        return;
+      }
+      event.preventDefault();
+      const touch = event.touches[0];
+      // Leave small jitters as taps, which read words aloud.
+      if (Math.hypot(touch.clientX - start.x, touch.clientY - start.y) < 8) return;
+
+      // Scroll while the finger is near the top or bottom edge, so the selection can grow past the screen.
+      const bounds = page.getBoundingClientRect();
+      const edge = 48;
+      if (touch.clientY < bounds.top + edge) page.scrollTop -= edge / 4;
+      else if (touch.clientY > bounds.bottom - edge) page.scrollTop += edge / 4;
+
+      const range = caretRangeAtPoint(editor, touch.clientX, touch.clientY);
+      if (!range) return;
+      const [anchorNode, anchorOffset] = caretPosition(editor, start.offset);
+      const [focusNode, focusOffset] = caretPosition(
+        editor,
+        caretOffset(editor, range.startContainer, range.startOffset),
+      );
+      window.getSelection()?.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset);
+    }
+
+    function handleTouchEnd() {
+      start = null;
+    }
+
+    page.addEventListener("touchstart", handleTouchStart, { passive: true });
+    page.addEventListener("touchmove", handleTouchMove, { passive: false });
+    page.addEventListener("touchend", handleTouchEnd);
+    page.addEventListener("touchcancel", handleTouchEnd);
+    return () => {
+      page.removeEventListener("touchstart", handleTouchStart);
+      page.removeEventListener("touchmove", handleTouchMove);
+      page.removeEventListener("touchend", handleTouchEnd);
+      page.removeEventListener("touchcancel", handleTouchEnd);
+    };
+  }, []);
+
+  useEffect(() => {
     if (editorRef.current && caretRef.current && highlightsRef.current)
       placeOverlays(editorRef.current, caretRef.current, highlightsRef.current);
   }, [layout]);
 
   return (
     <div
+      ref={pageRef}
       className="page"
       data-mode={mode}
       data-layout={layout}
