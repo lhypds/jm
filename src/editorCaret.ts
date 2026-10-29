@@ -19,11 +19,14 @@ export function caretStops(editor: HTMLElement) {
 }
 
 function stopRects(stop: Stop) {
-  if (!("index" in stop)) return stop.node.getClientRects();
+  if (!("index" in stop)) return Array.from(stop.node.getClientRects());
   const range = document.createRange();
   range.setStart(stop.node, stop.index);
   range.setEnd(stop.node, stop.index + 1);
-  return range.getClientRects();
+  // WebKit adds an empty rect at the end of the previous line for a character that starts a wrapped line.
+  const rects = Array.from(range.getClientRects());
+  const visible = rects.filter((rect) => rect.width > 0);
+  return visible.length ? visible : rects;
 }
 
 function isLineBreak(stop: Stop) {

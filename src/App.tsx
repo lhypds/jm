@@ -100,6 +100,12 @@ function isOnRange(editor: HTMLElement, range: Range, x: number, y: number) {
   );
 }
 
+/** Mark the word last tapped to read, since touch screens have no hover to show it. */
+function markTappedWord(editor: HTMLElement, word: HTMLElement | null) {
+  editor.querySelectorAll(".word.tapped").forEach((element) => element.classList.remove("tapped"));
+  word?.classList.add("tapped");
+}
+
 /** A range between two source offsets, in either order. */
 function offsetRange(editor: HTMLElement, [anchor, focus]: [number, number]) {
   const range = document.createRange();
@@ -244,15 +250,30 @@ function App() {
           return response.json() as Promise<{ segments: ReadingSegment[] }>;
         })
         .then(({ segments }) => {
-          // A system dialog such as Android's input method picker has the window. Rebuilding the editor
-          // while the input method reconnects closes the keyboard, so wait until the page has focus again.
-          if (!document.hasFocus()) {
-            const resume = () => applySegments(segments);
-            window.addEventListener("focus", resume, { once: true });
-            controller.signal.addEventListener("abort", () => window.removeEventListener("focus", resume));
-            return;
+          const editor = editorRef.current;
+          if (!editor || controller.signal.aborted || composingRef.current || sourceText(editor) !== text) return;
+
+          const focused = document.activeElement === editor;
+          const selection = window.getSelection();
+          const anchor = selection?.anchorNode;
+          const focus = selection?.focusNode;
+          const savedSelection =
+            focused && anchor && focus && editor.contains(anchor) && editor.contains(focus)
+              ? [caretOffset(editor, anchor, selection.anchorOffset), caretOffset(editor, focus, selection.focusOffset)]
+              : null;
+
+          renderReadings(editor, segments);
+
+          if (focused) {
+            editor.focus({ preventScroll: true });
+            if (savedSelection) {
+              const [anchorNode, anchorOffset] = caretPosition(editor, savedSelection[0]);
+              const [focusNode, focusOffset] = caretPosition(editor, savedSelection[1]);
+              window.getSelection()?.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset);
+            }
           }
-          applySegments(segments);
+          if (caretRef.current && highlightsRef.current)
+            placeOverlays(editor, caretRef.current, highlightsRef.current, touchSelectionRef.current);
         })
         .catch((error: unknown) => {
           if (!(error instanceof DOMException && error.name === "AbortError")) {
@@ -260,33 +281,6 @@ function App() {
           }
         });
     }, 120);
-
-    function applySegments(segments: ReadingSegment[]) {
-      const editor = editorRef.current;
-      if (!editor || controller.signal.aborted || composingRef.current || sourceText(editor) !== text) return;
-
-      const focused = document.activeElement === editor;
-      const selection = window.getSelection();
-      const anchor = selection?.anchorNode;
-      const focus = selection?.focusNode;
-      const savedSelection =
-        focused && anchor && focus && editor.contains(anchor) && editor.contains(focus)
-          ? [caretOffset(editor, anchor, selection.anchorOffset), caretOffset(editor, focus, selection.focusOffset)]
-          : null;
-
-      renderReadings(editor, segments);
-
-      if (focused) {
-        editor.focus({ preventScroll: true });
-        if (savedSelection) {
-          const [anchorNode, anchorOffset] = caretPosition(editor, savedSelection[0]);
-          const [focusNode, focusOffset] = caretPosition(editor, savedSelection[1]);
-          window.getSelection()?.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset);
-        }
-      }
-      if (caretRef.current && highlightsRef.current)
-        placeOverlays(editor, caretRef.current, highlightsRef.current, touchSelectionRef.current);
-    }
 
     return () => {
       window.clearTimeout(timer);
@@ -423,6 +417,7 @@ function App() {
       const touch = event.touches[0];
       // Leave small jitters as taps, which read words aloud.
       if (!start.dragged && Math.hypot(touch.clientX - start.x, touch.clientY - start.y) < 8) return;
+      if (!start.dragged) markTappedWord(editor, null);
       start.dragged = true;
 
       // Scroll while the finger is near the top or bottom edge, so the selection can grow past the screen.
@@ -498,6 +493,13 @@ function App() {
         pressRef.current = null;
         if (!editor || event.button !== 0 || composingRef.current) return;
         pressRef.current = { x: event.clientX, y: event.clientY };
+        markTappedWord(editor, null);
+        // A tap outside the text clears the touch selection, which would otherwise hide the caret.
+        if (touchSelectionRef.current) {
+          touchSelectionRef.current = null;
+          if (caretRef.current && highlightsRef.current)
+            placeOverlays(editor, caretRef.current, highlightsRef.current, null);
+        }
         const target = event.target instanceof Element ? event.target : null;
 
         // Clicking a word reads it, so leave insert mode without showing the caret.
@@ -536,14 +538,13 @@ function App() {
           const offset = paragraphEnd
             ? caretOffset(editor, paragraphEnd.startContainer, paragraphEnd.startOffset)
             : sourceText(editor).length;
-          if (mode === "insert") {
-            const [node, nodeOffset] = caretPosition(editor, offset);
-            editor.focus({ preventScroll: true });
-            window.getSelection()?.setBaseAndExtent(node, nodeOffset, node, nodeOffset);
-          } else {
-            savedCaretRef.current = offset;
-            setMode("insert");
-          }
+          // iOS opens the keyboard only for focus given during the tap itself, so make the editor
+          // editable and focus it now, rather than after insert mode renders.
+          editor.contentEditable = "true";
+          const [node, nodeOffset] = caretPosition(editor, offset);
+          editor.focus({ preventScroll: true });
+          window.getSelection()?.setBaseAndExtent(node, nodeOffset, node, nodeOffset);
+          if (mode === "normal") setMode("insert");
           return;
         }
 
@@ -580,7 +581,10 @@ function App() {
           const target = event.target;
           if (!(target instanceof Element)) return;
           const word = target.closest<HTMLElement>(".word");
-          if (word && event.currentTarget.contains(word)) pronounceJapanese(pronunciationText(word));
+          if (word && event.currentTarget.contains(word)) {
+            markTappedWord(event.currentTarget, word);
+            pronounceJapanese(pronunciationText(word));
+          }
         }}
         onKeyDown={(event) => {
           // Escape enters normal mode unless an input method is using it to cancel composition.

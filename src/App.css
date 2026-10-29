@@ -111,6 +111,13 @@ ruby {
   }
 }
 
+/* Touch screens instead mark the word last tapped, until the next tap or drag. */
+@media (hover: none) {
+  .paper:not(.selecting) .word.tapped {
+    background-color: rgba(255, 255, 51, 0.4);
+  }
+}
+
 rt {
   color: #000;
   font-size: 0.48em;
