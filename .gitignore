@@ -24,3 +24,6 @@ dist-ssr
 *.sw?
 
 .env
+
+# Reading corrections saved from the app
+data

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import type { ReadingSegment } from "../shared/types.ts";
 import {
   caretOffset,
@@ -83,6 +84,53 @@ function paintSelection(editor: HTMLElement, layer: HTMLElement, range: Range | 
       return element;
     }),
   );
+  return bands;
+}
+
+/** Float the word tools below the selection's last line, kept within the page's width. */
+function placeToolbar(toolbar: HTMLElement, bands: ReturnType<typeof selectionBands>) {
+  const page = toolbar.parentElement;
+  const band = bands.at(-1);
+  toolbar.hidden = !page || !band;
+  if (!page || !band) return;
+  const origin = page.getBoundingClientRect();
+  const margin = 8;
+  const center = (band.left + band.right) / 2 - origin.left;
+  const left = Math.max(margin, Math.min(center - toolbar.offsetWidth / 2, page.clientWidth - toolbar.offsetWidth - margin));
+  toolbar.style.transform = `translate(${left + page.scrollLeft}px, ${band.bottom - origin.top + page.scrollTop + margin}px)`;
+}
+
+/** The selected text in the editor: the app's own touch selection, or the window's. */
+function selectedRange(editor: HTMLElement, touchSelection: [number, number] | null) {
+  if (touchSelection) return offsetRange(editor, touchSelection);
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || !selection.rangeCount) return null;
+  const range = selection.getRangeAt(0);
+  return editor.contains(range.commonAncestorContainer) ? range : null;
+}
+
+/** The words a range touches, in whole, with the reading shown for a single annotated word. */
+function selectedWords(editor: HTMLElement, range: Range) {
+  let start = caretOffset(editor, range.startContainer, range.startOffset);
+  let end = caretOffset(editor, range.endContainer, range.endOffset);
+  const words = Array.from(editor.querySelectorAll<HTMLElement>(".word"))
+    .filter((word) => range.intersectsNode(word) && word.firstChild)
+    .map((word) => {
+      const wordStart = caretOffset(editor, word.firstChild!, 0);
+      return { word, start: wordStart, end: wordStart + (word.firstChild!.textContent?.length ?? 0) };
+    })
+    // A range starting at the very end of a word does not select any of it.
+    .filter((word) => word.start < end && word.end > start);
+  if (words.length) {
+    start = words[0].start;
+    end = words.at(-1)!.end;
+  }
+  const only = words.length === 1 ? words[0].word : null;
+  return {
+    word: sourceText(editor).slice(start, end),
+    reading: (only?.tagName === "RUBY" && only.querySelector("rt")?.textContent) || "",
+    offsets: [start, end] as [number, number],
+  };
 }
 
 /** The window selection when a viewport point lies on its painted bands, or null. */
@@ -118,6 +166,7 @@ function placeOverlays(
   editor: HTMLElement,
   caret: HTMLElement,
   highlights: HTMLElement,
+  toolbar: HTMLElement | null,
   touchSelection: [number, number] | null,
 ) {
   const selection = window.getSelection();
@@ -126,7 +175,8 @@ function placeOverlays(
     : selection?.rangeCount
       ? selection.getRangeAt(0)
       : null;
-  paintSelection(editor, highlights, range);
+  const bands = paintSelection(editor, highlights, range);
+  if (toolbar) placeToolbar(toolbar, bands);
   if (
     document.activeElement !== editor ||
     !range ||
@@ -157,7 +207,7 @@ function App() {
   const composingRef = useRef(false);
   // Touch screens keep the app's own selection, as source offsets, so the system's never shows.
   const touchSelectionRef = useRef<[number, number] | null>(null);
-  const selectedPlaybackRef = useRef<string | null>(null);
+  const pressedSelectionRef = useRef(false);
   // Like vim: normal mode only reads text aloud, and i or a returns to insert mode.
   const [mode, setMode] = useState<"insert" | "normal">("insert");
   // Text starts at the top left; Cmd+E toggles centering it on the screen.
@@ -167,6 +217,61 @@ function App() {
   const selectAllRef = useRef(false);
   const pressRef = useRef<{ x: number; y: number } | null>(null);
   const [text, setText] = useState("");
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const correctionInputRef = useRef<HTMLInputElement>(null);
+  // The words being corrected stay highlighted while their reading is typed, which moves the selection away.
+  const correctionRef = useRef<{ word: string; offsets: [number, number]; touch: boolean } | null>(null);
+  const [correctionDraft, setCorrectionDraft] = useState<string | null>(null);
+  // Bumped after a correction is saved, to annotate the text again.
+  const [readingsVersion, setReadingsVersion] = useState(0);
+
+  const repaintOverlays = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor || !caretRef.current || !highlightsRef.current) return;
+    const correction = correctionRef.current;
+    placeOverlays(
+      editor,
+      caretRef.current,
+      highlightsRef.current,
+      correction ? null : toolbarRef.current,
+      correction?.offsets ?? touchSelectionRef.current,
+    );
+  }, []);
+
+  function closeCorrection(restoreSelection: boolean) {
+    const correction = correctionRef.current;
+    const editor = editorRef.current;
+    if (!correction || !editor) return;
+    correctionRef.current = null;
+    setCorrectionDraft(null);
+    // Select the words again, so their tools return and show the new reading.
+    if (restoreSelection && !correction.touch) {
+      if (editor.isContentEditable) editor.focus({ preventScroll: true });
+      const range = offsetRange(editor, correction.offsets);
+      window.getSelection()?.setBaseAndExtent(range.startContainer, range.startOffset, range.endContainer, range.endOffset);
+    }
+    repaintOverlays();
+  }
+
+  async function saveCorrection(event: FormEvent) {
+    event.preventDefault();
+    const correction = correctionRef.current;
+    if (!correction || correctionDraft === null) return;
+    try {
+      const response = await fetch("/api/readings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ word: correction.word, reading: correctionDraft }),
+      });
+      if (!response.ok) throw new Error();
+    } catch {
+      console.error("Could not save the reading.");
+      return;
+    }
+    if (correctionRef.current !== correction) return;
+    closeCorrection(true);
+    setReadingsVersion((version) => version + 1);
+  }
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -202,10 +307,7 @@ function App() {
     let frame = 0;
     function updateCaret() {
       cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        if (editor && caretRef.current && highlightsRef.current)
-          placeOverlays(editor, caretRef.current, highlightsRef.current, touchSelectionRef.current);
-      });
+      frame = requestAnimationFrame(repaintOverlays);
     }
     // Center a single line, but align longer text to the left. Alignment never changes the width, so this settles.
     const resizeObserver = new ResizeObserver(() => {
@@ -232,7 +334,7 @@ function App() {
       editor.removeEventListener("input", updateCaret);
       window.removeEventListener("resize", updateCaret);
     };
-  }, []);
+  }, [repaintOverlays]);
 
   useEffect(() => {
     if (!text.trim()) return;
@@ -272,8 +374,7 @@ function App() {
               window.getSelection()?.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset);
             }
           }
-          if (caretRef.current && highlightsRef.current)
-            placeOverlays(editor, caretRef.current, highlightsRef.current, touchSelectionRef.current);
+          repaintOverlays();
         })
         .catch((error: unknown) => {
           if (!(error instanceof DOMException && error.name === "AbortError")) {
@@ -286,7 +387,7 @@ function App() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [text]);
+  }, [text, readingsVersion, repaintOverlays]);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -312,6 +413,7 @@ function App() {
 
     function handleKeyDown(event: KeyboardEvent) {
       if (!editor || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (event.target instanceof HTMLInputElement) return;
       if (event.key !== "i" && event.key !== "a") return;
       event.preventDefault();
 
@@ -347,7 +449,7 @@ function App() {
       } else if (key === "a") {
         // Select all of the text for editing, from either mode, rather than the whole page.
         const editor = editorRef.current;
-        if (!editor) return;
+        if (!editor || event.target instanceof HTMLInputElement) return;
         event.preventDefault();
         if (editor.isContentEditable) {
           editor.focus({ preventScroll: true });
@@ -374,10 +476,7 @@ function App() {
     let start: { x: number; y: number; offset: number; target: Element; dragged: boolean } | null = null;
     let scrollY: number | null = null;
 
-    function repaint() {
-      if (editor && caretRef.current && highlightsRef.current)
-        placeOverlays(editor, caretRef.current, highlightsRef.current, touchSelectionRef.current);
-    }
+    const repaint = repaintOverlays;
 
     function handleTouchStart(event: TouchEvent) {
       if (start && event.touches.length === 2) {
@@ -439,13 +538,10 @@ function App() {
       if (!tap || !editor) return;
       const { clientX, clientY } = event.changedTouches[0];
 
-      // A tap on the selection reads it; a tap anywhere else clears it.
+      // A tap on the selection keeps it, since its tools read it; a tap anywhere else clears it.
       if (touchSelectionRef.current) {
         const range = offsetRange(editor, touchSelectionRef.current);
-        if (isOnRange(editor, range, clientX, clientY)) {
-          pronounceJapanese(selectedPronunciation(range));
-          return;
-        }
+        if (isOnRange(editor, range, clientX, clientY)) return;
         touchSelectionRef.current = null;
         repaint();
       }
@@ -475,12 +571,9 @@ function App() {
       page.removeEventListener("touchend", handleTouchEnd);
       page.removeEventListener("touchcancel", handleTouchEnd);
     };
-  }, []);
+  }, [repaintOverlays]);
 
-  useEffect(() => {
-    if (editorRef.current && caretRef.current && highlightsRef.current)
-      placeOverlays(editorRef.current, caretRef.current, highlightsRef.current, touchSelectionRef.current);
-  }, [layout]);
+  useEffect(repaintOverlays, [layout, repaintOverlays]);
 
   return (
     <div
@@ -497,8 +590,7 @@ function App() {
         // A tap outside the text clears the touch selection, which would otherwise hide the caret.
         if (touchSelectionRef.current) {
           touchSelectionRef.current = null;
-          if (caretRef.current && highlightsRef.current)
-            placeOverlays(editor, caretRef.current, highlightsRef.current, null);
+          repaintOverlays();
         }
         const target = event.target instanceof Element ? event.target : null;
 
@@ -563,20 +655,17 @@ function App() {
         lang="ja"
         spellCheck={false}
         onMouseDown={(event) => {
-          selectedPlaybackRef.current = null;
+          pressedSelectionRef.current = false;
           if (event.button !== 0 || event.detail > 1 || composingRef.current) return;
-          const range = selectionAtPoint(event.currentTarget, event.clientX, event.clientY);
-          if (!range) return;
+          if (!selectionAtPoint(event.currentTarget, event.clientX, event.clientY)) return;
+          // A click on the selection keeps it, rather than reading the word under it; its tools read it.
           event.preventDefault();
-          selectedPlaybackRef.current = selectedPronunciation(range);
+          pressedSelectionRef.current = true;
         }}
         onClick={(event) => {
-          const selectedText = selectedPlaybackRef.current;
-          selectedPlaybackRef.current = null;
-          if (selectedText && !composingRef.current && event.detail === 1) {
-            pronounceJapanese(selectedText);
-            return;
-          }
+          const pressedSelection = pressedSelectionRef.current;
+          pressedSelectionRef.current = false;
+          if (pressedSelection) return;
           if (composingRef.current || event.detail > 1 || !window.getSelection()?.isCollapsed) return;
           const target = event.target;
           if (!(target instanceof Element)) return;
@@ -621,6 +710,86 @@ function App() {
       />
       <div ref={highlightsRef} className="selection-layer" aria-hidden="true" />
       <div ref={caretRef} className="caret" aria-hidden="true" hidden />
+      <div
+        ref={toolbarRef}
+        className="word-tools"
+        hidden
+        // Keep the selection and the page's own click handling out of the tools.
+        onMouseDown={(event) => {
+          event.stopPropagation();
+          if (!(event.target instanceof HTMLInputElement)) event.preventDefault();
+        }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        {correctionDraft === null ? (
+          <>
+            <button
+              type="button"
+              aria-label="Read aloud"
+              title="Read aloud"
+              onClick={() => {
+                const editor = editorRef.current;
+                const range = editor && selectedRange(editor, touchSelectionRef.current);
+                if (range) pronounceJapanese(selectedPronunciation(range));
+              }}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 9h4l5-4v14l-5-4H4z" />
+                <path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              aria-label="Correct the reading"
+              title="Correct the reading"
+              onClick={() => {
+                const editor = editorRef.current;
+                const range = editor && selectedRange(editor, touchSelectionRef.current);
+                if (!editor || !range) return;
+                const { word, reading, offsets } = selectedWords(editor, range);
+                if (!word.trim() || word.includes("\n")) return;
+                correctionRef.current = { word, offsets, touch: touchSelectionRef.current !== null };
+                // Focus during the tap itself, or iOS will not open the keyboard.
+                flushSync(() => setCorrectionDraft(reading));
+                correctionInputRef.current?.focus({ preventScroll: true });
+                correctionInputRef.current?.select();
+                repaintOverlays();
+              }}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 20h4L19 9l-4-4L4 16z" />
+                <path d="M13 7l4 4" />
+              </svg>
+            </button>
+          </>
+        ) : (
+          <form onSubmit={saveCorrection}>
+            <input
+              ref={correctionInputRef}
+              value={correctionDraft}
+              onChange={(event) => setCorrectionDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Escape" || event.nativeEvent.isComposing) return;
+                event.preventDefault();
+                closeCorrection(true);
+              }}
+              onBlur={() => closeCorrection(false)}
+              aria-label="Correct reading, in kana or English"
+              maxLength={100}
+              autoComplete="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              enterKeyHint="done"
+            />
+            <button type="submit" aria-label="Save the reading" title="Save the reading">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M19 5v7a3 3 0 0 1-3 3H5" />
+                <path d="M9 11l-4 4 4 4" />
+              </svg>
+            </button>
+          </form>
+        )}
+      </div>
     </div>
   );
 }

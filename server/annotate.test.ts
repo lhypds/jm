@@ -22,6 +22,28 @@ describe("annotateJapanese", () => {
     expect(formatWithReadings(segments)).toBe("私(わたし)は 日本語(にほんご)を勉強(べんきょう)します。");
   });
 
+  it("reads compounds kuromoji misreads as a whole word", async () => {
+    expect(formatWithReadings(await annotateJapanese("異星人が来た。"))).toBe("異星人(いせいじん)が来(き)た。");
+  });
+
+  it("applies user corrections over split words, kanji readings and loanwords", async () => {
+    const userReadings = new Map([
+      ["今日", "こんにち"],
+      ["星人", "せいじん"],
+      ["ライト", "right"],
+    ]);
+    const segments = await annotateJapanese("今日はライトの異星人。", userReadings);
+
+    expect(formatWithReadings(segments)).toBe("今日(こんにち)はライト(right)の異星人(いせいじん)。");
+    expect(segments.find(({ text }) => text === "ライト")).toEqual({ text: "ライト", reading: "right", readingLanguage: "en" });
+  });
+
+  it("joins the segments a user correction spans", async () => {
+    const segments = await annotateJapanese("星人が来た", new Map([["星人", "せいじん"]]));
+
+    expect(segments[0]).toEqual({ text: "星人", reading: "せいじん" });
+  });
+
   it("leaves kana and punctuation unannotated", async () => {
     const segments = await annotateJapanese("こんにちは。");
 

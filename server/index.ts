@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { annotateJapanese } from "./annotate.ts";
 import { maxSpeechLength, speechVoice, synthesizeJapanese } from "./speech.ts";
+import { loadUserReadings, maxReadingLength, maxWordLength, saveUserReadings } from "./userReadings.ts";
 
 const app = express();
 const port = Number(process.env.PORT) || 4174;
@@ -12,6 +13,7 @@ const webRoot = join(root, "dist");
 const logFile = join(root, "logs", "jm.log");
 
 mkdirSync(dirname(logFile), { recursive: true });
+const userReadings = loadUserReadings();
 
 app.use(express.json({ limit: "1mb" }));
 
@@ -53,7 +55,7 @@ app.post("/api/annotate", async (request, response) => {
   }
 
   try {
-    const segments = await annotateJapanese(text);
+    const segments = await annotateJapanese(text, userReadings);
     logExchange("/api/annotate", { text }, { status: 200, segments });
     response.json({ segments });
   } catch (error) {
@@ -62,6 +64,41 @@ app.post("/api/annotate", async (request, response) => {
     logExchange("/api/annotate", { text }, { status: 500, error: message });
     response.status(500).json({ error: message });
   }
+});
+
+// An empty reading removes the correction, restoring the dictionary's reading.
+app.put("/api/readings", (request, response) => {
+  const word = request.body?.word;
+  const reading = request.body?.reading;
+  if (
+    typeof word !== "string" ||
+    typeof reading !== "string" ||
+    !word.trim() ||
+    word.includes("\n") ||
+    word.trim().length > maxWordLength ||
+    reading.trim().length > maxReadingLength
+  ) {
+    const error = `A word of 1–${maxWordLength} characters on one line and a reading of up to ${maxReadingLength} are required.`;
+    logExchange("/api/readings", { word, reading }, { status: 400, error });
+    response.status(400).json({ error });
+    return;
+  }
+
+  const key = word.trim();
+  const value = reading.trim();
+  if (value) userReadings.set(key, value);
+  else userReadings.delete(key);
+  try {
+    saveUserReadings(userReadings);
+  } catch (error) {
+    console.error(error);
+    const message = "The reading could not be saved.";
+    logExchange("/api/readings", { word, reading }, { status: 500, error: message });
+    response.status(500).json({ error: message });
+    return;
+  }
+  logExchange("/api/readings", { word, reading }, { status: 200 });
+  response.json({ word: key, reading: value });
 });
 
 if (existsSync(webRoot)) {

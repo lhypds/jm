@@ -24,7 +24,44 @@ function toHiragana(value: string) {
   return value.replace(/[ァ-ヶ]/g, (character) => String.fromCharCode(character.charCodeAt(0) - 0x60));
 }
 
-export async function annotateJapanese(text: string): Promise<ReadingSegment[]> {
+// Compounds missing from IPADIC that kuromoji splits and misreads (e.g. 異/星(ほし)/人).
+const compoundReadings: ReadonlyMap<string, string> = new Map([["異星人", "いせいじん"]]);
+
+/** Replace the longest run of whole segments spelling a listed word with that word and its reading. */
+function applyWordReadings(segments: ReadingSegment[], readings: ReadonlyMap<string, string>) {
+  const longest = Math.max(0, ...[...readings.keys()].map((word) => word.length));
+  const result: ReadingSegment[] = [];
+
+  for (let start = 0; start < segments.length; start += 1) {
+    let text = "";
+    let match: { end: number; reading: string } | undefined;
+    for (let end = start; end < segments.length && text.length < longest; end += 1) {
+      text += segments[end].text;
+      const reading = readings.get(text);
+      if (reading) match = { end, reading };
+    }
+
+    if (match) {
+      result.push({
+        text: segments.slice(start, match.end + 1).map(({ text }) => text).join(""),
+        reading: match.reading,
+        // Latin letters are an English gloss, which is never pronounced.
+        ...(/[A-Za-z]/.test(match.reading) ? { readingLanguage: "en" } : {}),
+      });
+      start = match.end;
+    } else {
+      result.push(segments[start]);
+    }
+  }
+
+  return result;
+}
+
+/** Annotate the text; user corrections override both kuromoji and the loanword dictionary. */
+export async function annotateJapanese(
+  text: string,
+  userReadings: ReadonlyMap<string, string> = new Map(),
+): Promise<ReadingSegment[]> {
   if (!text) return [];
 
   const tokenizer = await getTokenizer();
@@ -45,7 +82,7 @@ export async function annotateJapanese(text: string): Promise<ReadingSegment[]> 
   }
 
   if (cursor < text.length) segments.push({ text: text.slice(cursor) });
-  return annotateLoanwords(segments);
+  return applyWordReadings(annotateLoanwords(segments), new Map([...compoundReadings, ...userReadings]));
 }
 
 export function formatWithReadings(segments: ReadingSegment[]) {

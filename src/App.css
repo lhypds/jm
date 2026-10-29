@@ -94,6 +94,68 @@
   mix-blend-mode: difference;
 }
 
+/* Under a selection: read it aloud, or correct its reading. */
+.word-tools {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 2px solid #000;
+  background: #fff;
+  cursor: default;
+}
+
+.word-tools[hidden] {
+  display: none;
+}
+
+.word-tools button {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  color: #000;
+  background: #fff;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .word-tools button:hover {
+    background-color: rgba(255, 255, 51, 0.4);
+  }
+}
+
+.word-tools svg {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.word-tools form {
+  display: flex;
+  gap: 2px;
+}
+
+.word-tools input {
+  width: 8em;
+  height: 40px;
+  padding: 0 8px;
+  border: 0;
+  outline: 0;
+  color: #000;
+  background: #fff;
+  font-size: 18px;
+}
+
 /* Keep readings inside the line's leading, so a line does not grow when its first reading arrives. */
 ruby {
   ruby-align: center;

@@ -2,6 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { annotateJapanese, formatWithReadings } from "./server/annotate.ts";
+import { loadUserReadings } from "./server/userReadings.ts";
 
 async function main() {
   const filePath = process.argv[2];
@@ -15,7 +16,7 @@ async function main() {
 
   try {
     const text = await readFile(filePath, "utf8");
-    const segments = await annotateJapanese(text);
+    const segments = await annotateJapanese(text, loadUserReadings());
     process.stdout.write(formatWithReadings(segments));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

@@ -363979,7 +363979,33 @@ function getTokenizer() {
 function toHiragana(value) {
   return value.replace(/[ァ-ヶ]/g, (character) => String.fromCharCode(character.charCodeAt(0) - 96));
 }
-async function annotateJapanese(text) {
+var compoundReadings = /* @__PURE__ */ new Map([["\u7570\u661F\u4EBA", "\u3044\u305B\u3044\u3058\u3093"]]);
+function applyWordReadings(segments, readings) {
+  const longest = Math.max(0, ...[...readings.keys()].map((word) => word.length));
+  const result = [];
+  for (let start = 0; start < segments.length; start += 1) {
+    let text = "";
+    let match;
+    for (let end = start; end < segments.length && text.length < longest; end += 1) {
+      text += segments[end].text;
+      const reading = readings.get(text);
+      if (reading) match = { end, reading };
+    }
+    if (match) {
+      result.push({
+        text: segments.slice(start, match.end + 1).map(({ text: text2 }) => text2).join(""),
+        reading: match.reading,
+        // Latin letters are an English gloss, which is never pronounced.
+        .../[A-Za-z]/.test(match.reading) ? { readingLanguage: "en" } : {}
+      });
+      start = match.end;
+    } else {
+      result.push(segments[start]);
+    }
+  }
+  return result;
+}
+async function annotateJapanese(text, userReadings = /* @__PURE__ */ new Map()) {
   if (!text) return [];
   const tokenizer = await getTokenizer();
   const tokens = tokenizer.tokenize(text);
@@ -363996,10 +364022,27 @@ async function annotateJapanese(text) {
     cursor = index + token.surface_form.length;
   }
   if (cursor < text.length) segments.push({ text: text.slice(cursor) });
-  return annotateLoanwords(segments);
+  return applyWordReadings(annotateLoanwords(segments), new Map([...compoundReadings, ...userReadings]));
 }
 function formatWithReadings(segments) {
   return segments.map(({ text, reading }) => reading ? `${text}(${reading})` : text).join("");
+}
+
+// server/userReadings.ts
+import { mkdirSync, readFileSync, writeFileSync } from "fs";
+import { dirname as dirname2, join as join2 } from "path";
+import { fileURLToPath } from "url";
+var defaultPath = join2(dirname2(fileURLToPath(import.meta.url)), "..", "data", "user-readings.json");
+function loadUserReadings(path = defaultPath) {
+  try {
+    const entries = JSON.parse(readFileSync(path, "utf8"));
+    if (!entries || typeof entries !== "object") return /* @__PURE__ */ new Map();
+    return new Map(
+      Object.entries(entries).filter((entry) => typeof entry[1] === "string")
+    );
+  } catch {
+    return /* @__PURE__ */ new Map();
+  }
 }
 
 // cli.ts
@@ -364013,7 +364056,7 @@ async function main() {
   }
   try {
     const text = await readFile(filePath, "utf8");
-    const segments = await annotateJapanese(text);
+    const segments = await annotateJapanese(text, loadUserReadings());
     process.stdout.write(formatWithReadings(segments));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
