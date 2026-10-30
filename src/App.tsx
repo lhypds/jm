@@ -208,6 +208,8 @@ function App() {
   // Touch screens keep the app's own selection, as source offsets, so the system's never shows.
   const touchSelectionRef = useRef<[number, number] | null>(null);
   const pressedSelectionRef = useRef(false);
+  // While a mouse button or finger is still dragging out a selection, its tools wait for the release.
+  const selectingRef = useRef(false);
   // Like vim: normal mode only reads text aloud, and i or a returns to insert mode.
   const [mode, setMode] = useState<"insert" | "normal">("insert");
   // Text starts at the top left; Cmd+E toggles centering it on the screen.
@@ -230,12 +232,13 @@ function App() {
     if (!editor || !caretRef.current || !highlightsRef.current) return;
     const correction = correctionRef.current;
     // Some input methods select the text being composed; only a selection the user made gets the tools.
-    if (composingRef.current && toolbarRef.current) toolbarRef.current.hidden = true;
+    const hideTools = composingRef.current || selectingRef.current;
+    if (hideTools && toolbarRef.current) toolbarRef.current.hidden = true;
     placeOverlays(
       editor,
       caretRef.current,
       highlightsRef.current,
-      correction || composingRef.current ? null : toolbarRef.current,
+      correction || hideTools ? null : toolbarRef.current,
       correction?.offsets ?? touchSelectionRef.current,
     );
   }, []);
@@ -317,6 +320,17 @@ function App() {
       updateCaret();
     });
     resizeObserver.observe(editor);
+    // Presses on the tools stop propagating before they reach the document, so they never count as selecting.
+    function handleMouseDown(event: MouseEvent) {
+      if (event.button === 0) selectingRef.current = true;
+    }
+    function handleMouseUp(event: MouseEvent) {
+      if (event.button !== 0 || !selectingRef.current) return;
+      selectingRef.current = false;
+      updateCaret();
+    }
+    document.addEventListener("mousedown", handleMouseDown);
+    window.addEventListener("mouseup", handleMouseUp);
     document.addEventListener("selectionchange", updateCaret);
     editor.addEventListener("focus", updateCaret);
     editor.addEventListener("blur", updateCaret);
@@ -330,6 +344,8 @@ function App() {
       observer.disconnect();
       cancelAnimationFrame(frame);
       resizeObserver.disconnect();
+      document.removeEventListener("mousedown", handleMouseDown);
+      window.removeEventListener("mouseup", handleMouseUp);
       document.removeEventListener("selectionchange", updateCaret);
       editor.removeEventListener("focus", updateCaret);
       editor.removeEventListener("blur", updateCaret);
@@ -520,6 +536,7 @@ function App() {
       if (!start.dragged && Math.hypot(touch.clientX - start.x, touch.clientY - start.y) < 8) return;
       if (!start.dragged) markTappedWord(editor, null);
       start.dragged = true;
+      selectingRef.current = true;
 
       // Scroll while the finger is near the top or bottom edge, so the selection can grow past the screen.
       const bounds = page.getBoundingClientRect();
@@ -537,6 +554,10 @@ function App() {
       const tap = start && !start.dragged && event.type === "touchend" ? start : null;
       start = null;
       if (event.touches.length < 2) scrollY = null;
+      if (selectingRef.current) {
+        selectingRef.current = false;
+        repaint();
+      }
       if (!tap || !editor) return;
       const { clientX, clientY } = event.changedTouches[0];
 
