@@ -269,6 +269,58 @@ describe("deleteEditorRubyCharacter", () => {
     expect(editorText(editor)).toBe("日本語");
     expect(editor.querySelector("rt")!.textContent).toBe("にほんご");
   });
+
+  // Firefox deletes nothing forward from the end of a text node after its hard break.
+  describe("from the end of the text above a line", () => {
+    function lineStartEditor(html: string) {
+      const editor = document.createElement("main");
+      editor.contentEditable = "true";
+      editor.innerHTML = html;
+      document.body.append(editor);
+      const lineBreak = Array.from(editor.childNodes).find((node) => node instanceof Text && node.data.endsWith("\n"))!;
+      const range = document.createRange();
+      range.setStart(lineBreak, lineBreak.textContent!.length);
+      window.getSelection()?.addRange(range);
+      return editor;
+    }
+
+    it("deletes the first character of the word opening the line below", () => {
+      const editor = lineStartEditor('<span class="word">漢字</span>\n<span class="word">32</span>');
+      expect(deleteEditorRubyCharacter(editor, "forward")).toBe(true);
+      expect(editorText(editor)).toBe("漢字\n2");
+      const selection = window.getSelection()!;
+      expect(selection.anchorNode?.textContent).toBe("2");
+      expect(selection.anchorOffset).toBe(0);
+    });
+
+    it("drops the emptied word wrapper of a single-character word", () => {
+      const editor = lineStartEditor('<span class="word">漢字</span>\n<span class="word">3</span>');
+      expect(deleteEditorRubyCharacter(editor, "forward")).toBe(true);
+      expect(editorText(editor)).toBe("漢字\n");
+      expect(editor.querySelector("span + span")).toBeNull();
+      expect(editor.querySelectorAll("[data-editor-tail]")).toHaveLength(1);
+    });
+
+    it("turns a ruby opening the line below into plain text, as from elsewhere", () => {
+      const editor = lineStartEditor('<span class="word">漢字</span>\n<ruby class="word">次回<rt contenteditable="false">じかい</rt></ruby>');
+      expect(deleteEditorRubyCharacter(editor, "forward")).toBe(true);
+      expect(editorText(editor)).toBe("漢字\n回");
+      expect(editor.querySelector("ruby")).toBeNull();
+    });
+
+    it("deletes nothing after an empty last line", () => {
+      const editor = lineStartEditor('<span class="word">漢字</span>\n<br data-editor-tail="">');
+      expect(deleteEditorRubyCharacter(editor, "forward")).toBe(true);
+      expect(editorText(editor)).toBe("漢字\n");
+      expect(editor.querySelectorAll("[data-editor-tail]")).toHaveLength(1);
+    });
+
+    it("leaves the hard break before the caret to the browser", () => {
+      const editor = lineStartEditor('<span class="word">漢字</span>\n<span class="word">32</span>');
+      expect(deleteEditorRubyCharacter(editor, "backward")).toBe(false);
+      expect(editorText(editor)).toBe("漢字\n32");
+    });
+  });
 });
 
 describe("deleteEditorEmptyLastLine", () => {

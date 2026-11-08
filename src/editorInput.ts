@@ -145,9 +145,10 @@ function characterSpan(data: string, index: number): [number, number] {
 }
 
 /**
- * Delete one character next to the caret when it or the caret belongs to a ruby. Browsers
- * would otherwise remove the non-editable reading first. A ruby losing a base character
- * becomes plain text so its stale reading disappears until the next annotation.
+ * Delete one character next to the caret when it or the caret belongs to a ruby, or when the
+ * caret follows a hard break and deletes forward. Browsers would otherwise remove the
+ * non-editable reading first, or nothing at all. A ruby losing a base character becomes plain
+ * text so its stale reading disappears until the next annotation.
  */
 export function deleteEditorRubyCharacter(editor: HTMLElement, direction: "backward" | "forward"): boolean {
   const selection = window.getSelection();
@@ -165,7 +166,15 @@ export function deleteEditorRubyCharacter(editor: HTMLElement, direction: "backw
   const caretRuby = (
     range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement
   )?.closest("ruby");
-  if (caretRuby && editor.contains(caretRuby) && !stopRuby) {
+  // A click followed by i, or Home, puts the caret at the end of the text above a line, right
+  // after its hard break. Firefox ignores a forward deletion from there when the next character
+  // starts another node, so the word opening the line below could not be deleted from its front.
+  const afterBreak =
+    direction === "forward" &&
+    range.startContainer instanceof Text &&
+    range.startOffset === range.startContainer.length &&
+    range.startContainer.data.endsWith("\n");
+  if (((caretRuby && editor.contains(caretRuby)) || afterBreak) && !stopRuby) {
     if (!stop) return true;
     if (!("index" in stop)) {
       // Only the placeholder of an empty last line follows, so there is nothing to delete.
