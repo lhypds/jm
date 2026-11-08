@@ -156,6 +156,111 @@
   font-size: 18px;
 }
 
+/* The selected text and its translation, below the text between two full-width rules, with the language menu and a close button at the top right. */
+.translation {
+  flex-shrink: 0;
+  align-self: stretch;
+  margin-top: 40px;
+  padding: 8px 0 16px;
+  border-top: 2px solid #000;
+  border-bottom: 2px solid #000;
+  color: #000;
+  text-align: left;
+  font-size: 20px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.translation p {
+  margin: 0;
+}
+
+.translation-result {
+  margin-top: 12px;
+  color: #666;
+}
+
+.translation-result[data-state="pending"] {
+  opacity: 0.5;
+}
+
+.translation-bar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+  margin-bottom: 4px;
+  white-space: normal;
+}
+
+.translation-language {
+  position: relative;
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  height: 40px;
+  padding: 0 8px;
+  color: #000;
+  background: #fff;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.translation-language svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.translation-language select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  font: inherit;
+}
+
+.translation-language:has(select:focus-visible) {
+  outline: 2px solid #000;
+}
+
+.translation-close {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  color: #000;
+  background: #fff;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .translation-language:hover,
+  .translation-close:hover {
+    background-color: rgba(255, 255, 51, 0.4);
+  }
+}
+
+.translation-close svg {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 /* Keep readings inside the line's leading, so a line does not grow when its first reading arrives. */
 ruby {
   ruby-align: center;
@@ -207,5 +312,9 @@ rt {
 
   .paper {
     font-size: 24px;
+  }
+
+  .translation {
+    font-size: 18px;
   }
 }

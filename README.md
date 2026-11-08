@@ -28,6 +28,16 @@ service may change or become unavailable; there is deliberately no silent fallba
 to system speech. A production deployment should use a supported, licensed speech
 service such as Azure AI Speech.
 
+## Translation
+
+The translate button between the speaker and the pencil sends the selected words to
+OpenAI and shows the original and its translation below the text, until closed with
+the × at the top right. The language menu beside the × picks the target language;
+it starts as the browser's language, or English for Japanese browsers, and the
+choice is remembered in the browser. Set `OPENAI_API_KEY` in `.env` to enable
+translation; `OPENAI_MODEL` picks the model (default `gpt-4o-mini`). Only text
+requested for translation is sent to OpenAI.
+
 ## React + TypeScript + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.

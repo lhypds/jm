@@ -4,11 +4,25 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { annotateJapanese } from "./annotate.ts";
 import { maxSpeechLength, speechVoice, synthesizeJapanese } from "./speech.ts";
+import {
+  isTranslationConfigured,
+  maxTranslationLength,
+  translateJapanese,
+  translationLanguage,
+  translationModel,
+} from "./translate.ts";
 import { loadUserReadings, maxReadingLength, maxWordLength, saveUserReadings } from "./userReadings.ts";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+// Settings such as the OpenAI key live in .env; variables already in the environment win.
+try {
+  process.loadEnvFile(join(root, ".env"));
+} catch {
+  // No .env yet: setup.sh creates one from .env.example.
+}
 
 const app = express();
 const port = Number(process.env.PORT) || 4174;
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const webRoot = join(root, "dist");
 const logFile = join(root, "logs", "jm.log");
 
@@ -63,6 +77,33 @@ app.post("/api/annotate", async (request, response) => {
     const message = "Japanese text could not be read.";
     logExchange("/api/annotate", { text }, { status: 500, error: message });
     response.status(500).json({ error: message });
+  }
+});
+
+app.post("/api/translate", async (request, response) => {
+  const text = request.body?.text;
+  const language = translationLanguage(request.body?.language);
+  if (typeof text !== "string" || !text.trim() || text.length > maxTranslationLength) {
+    const error = `Translation requires 1–${maxTranslationLength} characters.`;
+    logExchange("/api/translate", { text, language }, { status: 400, error });
+    response.status(400).json({ error });
+    return;
+  }
+  if (!isTranslationConfigured()) {
+    const error = "Set OPENAI_API_KEY in .env to translate.";
+    logExchange("/api/translate", { text, language }, { status: 503, error });
+    response.status(503).json({ error });
+    return;
+  }
+  try {
+    const translation = await translateJapanese(text, language);
+    logExchange("/api/translate", { text, language }, { status: 200, model: translationModel(), translation });
+    response.json({ translation, language });
+  } catch (error) {
+    console.error("Translation failed.", error instanceof Error ? error.message : error);
+    const message = "Translation is unavailable. Please try again.";
+    logExchange("/api/translate", { text, language }, { status: 502, error: message });
+    response.status(502).json({ error: message });
   }
 });
 

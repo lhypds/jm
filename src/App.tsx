@@ -19,6 +19,7 @@ import {
   removeEditorLinks,
 } from "./editorInput.ts";
 import { pronunciationText, pronounceJapanese, selectedPronunciation, stopPronunciation } from "./pronunciation.ts";
+import { loadTranslationLanguage, saveTranslationLanguage, translationLanguages } from "./translationLanguage.ts";
 import "./App.css";
 
 function sourceText(editor: HTMLElement) {
@@ -226,6 +227,15 @@ function App() {
   const [correctionDraft, setCorrectionDraft] = useState<string | null>(null);
   // Bumped after a correction is saved, to annotate the text again.
   const [readingsVersion, setReadingsVersion] = useState(0);
+  // The selected text and its translation, shown below the text until closed.
+  const [translation, setTranslation] = useState<{
+    source: string;
+    result: string | null;
+    error: string | null;
+  } | null>(null);
+  // The language to translate into, chosen in the panel and remembered by the browser.
+  const [translationLanguage, setTranslationLanguage] = useState(loadTranslationLanguage);
+  const translationRequestRef = useRef<AbortController | null>(null);
 
   const repaintOverlays = useCallback(() => {
     const editor = editorRef.current;
@@ -276,6 +286,60 @@ function App() {
     if (correctionRef.current !== correction) return;
     closeCorrection(true);
     setReadingsVersion((version) => version + 1);
+  }
+
+  function requestTranslation(source: string, language: string) {
+    translationRequestRef.current?.abort();
+    const controller = new AbortController();
+    translationRequestRef.current = controller;
+    setTranslation({ source, result: null, error: null });
+
+    fetch("/api/translate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: source, language }),
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const data = (await response.json().catch(() => null)) as { translation?: unknown; error?: unknown } | null;
+        if (controller.signal.aborted) return;
+        if (response.ok && typeof data?.translation === "string") {
+          setTranslation({ source, result: data.translation, error: null });
+        } else {
+          const error = typeof data?.error === "string" ? data.error : "Translation is unavailable. Please try again.";
+          setTranslation({ source, result: null, error });
+        }
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setTranslation({ source, result: null, error: "Translation is unavailable. Please try again." });
+      });
+  }
+
+  function translateSelection() {
+    const editor = editorRef.current;
+    const range = editor && selectedRange(editor, touchSelectionRef.current);
+    if (!editor || !range) return;
+    const { word: source } = selectedWords(editor, range);
+    if (!source.trim()) return;
+    requestTranslation(source, translationLanguage);
+    // The translation now shows the text, so the selection and its tools are done.
+    touchSelectionRef.current = null;
+    window.getSelection()?.collapseToEnd();
+    repaintOverlays();
+  }
+
+  // Changing the language translates the shown text again, into the new one.
+  function chooseTranslationLanguage(language: string) {
+    saveTranslationLanguage(language);
+    setTranslationLanguage(language);
+    if (translation) requestTranslation(translation.source, language);
+  }
+
+  function closeTranslation() {
+    translationRequestRef.current?.abort();
+    translationRequestRef.current = null;
+    setTranslation(null);
   }
 
   useEffect(() => {
@@ -596,7 +660,8 @@ function App() {
     };
   }, [repaintOverlays]);
 
-  useEffect(repaintOverlays, [layout, repaintOverlays]);
+  // The translation panel below the text moves it, so the overlays follow.
+  useEffect(repaintOverlays, [layout, translation, repaintOverlays]);
 
   return (
     <div
@@ -712,7 +777,8 @@ function App() {
         }}
         onPaste={(event) => {
           event.preventDefault();
-          const pasted = event.clipboardData.getData("text/plain");
+          // Copied passages often carry line breaks or spaces at either end; blank lines inside stay.
+          const pasted = event.clipboardData.getData("text/plain").trim();
           if (pasted && insertEditorText(event.currentTarget, pasted)) {
             setText(sourceText(event.currentTarget));
           }
@@ -733,6 +799,60 @@ function App() {
           if (!composingRef.current) setText(sourceText(event.currentTarget));
         }}
       />
+      {translation && (
+        <section
+          className="translation"
+          aria-label="Translation"
+          // Clicks here select the translation, rather than moving the caret after the text above.
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="translation-bar">
+            {/* The chosen name sets the width, with the native menu laid invisibly over it. */}
+            <label className="translation-language" lang={translationLanguage} title="Translate into">
+              <span aria-hidden="true">
+                {translationLanguages.find((language) => language.tag === translationLanguage)?.name}
+              </span>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+              <select
+                aria-label="Translate into"
+                value={translationLanguage}
+                onChange={(event) => chooseTranslationLanguage(event.target.value)}
+              >
+                {translationLanguages.map((language) => (
+                  <option key={language.tag} value={language.tag} lang={language.tag}>
+                    {language.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              className="translation-close"
+              aria-label="Close the translation"
+              title="Close the translation"
+              onClick={closeTranslation}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M6 6l12 12M18 6L6 18" />
+              </svg>
+            </button>
+          </div>
+          <p className="translation-source" lang="ja">
+            {translation.source}
+          </p>
+          <p
+            className="translation-result"
+            lang={translationLanguage}
+            aria-live="polite"
+            data-state={translation.error ? "error" : translation.result === null ? "pending" : "done"}
+          >
+            {translation.error ?? translation.result ?? "Translating…"}
+          </p>
+        </section>
+      )}
       <div ref={highlightsRef} className="selection-layer" aria-hidden="true" />
       <div ref={caretRef} className="caret" aria-hidden="true" hidden />
       <div
@@ -761,6 +881,12 @@ function App() {
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M4 9h4l5-4v14l-5-4H4z" />
                 <path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11" />
+              </svg>
+            </button>
+            <button type="button" aria-label="Translate" title="Translate" onClick={translateSelection}>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 5h10M8 3v2M11 5c-.7 4-3.3 7.5-7 9.5M5.5 8.5c1.2 2.6 3.4 4.7 6.5 6" />
+                <path d="M12 21l4.5-11 4.5 11M13.7 17h5.6" />
               </svg>
             </button>
             <button

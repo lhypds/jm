@@ -5,10 +5,19 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 
 echo "Setting up..."
 
-# Create .env from .env.example if not present
+# Create .env from .env.example if not present, and add any settings a newer .env.example introduced
 if [ ! -f "$ROOT/.env" ]; then
   echo "Creating .env from .env.example..."
   cp "$ROOT/.env.example" "$ROOT/.env"
+else
+  while IFS= read -r line || [ -n "$line" ]; do
+    key="${line%%=*}"
+    case "$key" in ""|\#*) continue ;; esac
+    if ! grep -q "^${key}=" "$ROOT/.env"; then
+      echo "Adding $key to .env..."
+      printf '%s\n' "$line" >> "$ROOT/.env"
+    fi
+  done < "$ROOT/.env.example"
 fi
 
 # Install pm2 globally if not present
