@@ -1,5 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import type { ReadingSegment } from "../shared/types.ts";
 import {
   caretOffset,
@@ -7,6 +7,8 @@ import {
   caretPosition,
   caretRangeAtPoint,
   isAfterText,
+  isBelowText,
+  moveCaretToLineEdge,
   paragraphEndAtPoint,
   selectionBands,
 } from "./editorCaret.ts";
@@ -16,8 +18,18 @@ import {
   deleteEditorRubyCharacter,
   insertEditorLineBreak,
   insertEditorText,
+  refreshEditorTail,
   removeEditorLinks,
 } from "./editorInput.ts";
+import {
+  deleteEditorBreakAroundNote,
+  editorNoteAtCaret,
+  editorNoteOffset,
+  editorNotes,
+  placeEditorNote,
+  startLineBelowNote,
+} from "./editorNote.ts";
+import { EditorHistory, type EditorSnapshot } from "./editorHistory.ts";
 import { pronunciationText, pronounceJapanese, selectedPronunciation, stopPronunciation } from "./pronunciation.ts";
 import { loadTranslationLanguage, saveTranslationLanguage, translationLanguages } from "./translationLanguage.ts";
 import "./App.css";
@@ -227,15 +239,20 @@ function App() {
   const [correctionDraft, setCorrectionDraft] = useState<string | null>(null);
   // Bumped after a correction is saved, to annotate the text again.
   const [readingsVersion, setReadingsVersion] = useState(0);
-  // The selected text and its translation, shown below the text until closed.
-  const [translation, setTranslation] = useState<{
-    source: string;
-    result: string | null;
-    error: string | null;
-  } | null>(null);
-  // The language to translate into, chosen in the panel and remembered by the browser.
+  // Cmd+Z and Cmd+Shift+Z step through the text's history, recorded before each edit.
+  const historyRef = useRef(new EditorHistory());
+  const historyActionsRef = useRef<{ undo: () => void; redo: () => void }>({ undo() {}, redo() {} });
+  // Selected passages and their translations, each shown under its passage's line until closed. Every
+  // translation lives inside the editor's text as a non-editable note; React renders into it through a portal.
+  const [translations, setTranslations] = useState<
+    { id: number; host: HTMLElement; source: string; result: string | null; error: string | null }[]
+  >([]);
+  const nextTranslationIdRef = useRef(1);
+  const translationRequestsRef = useRef(new Map<number, AbortController>());
+  // The language to translate into, chosen in a panel and remembered by the browser.
   const [translationLanguage, setTranslationLanguage] = useState(loadTranslationLanguage);
-  const translationRequestRef = useRef<AbortController | null>(null);
+  // The translation whose language menu is open, if any.
+  const [languageMenuOpen, setLanguageMenuOpen] = useState<number | null>(null);
 
   const repaintOverlays = useCallback(() => {
     const editor = editorRef.current;
@@ -288,11 +305,15 @@ function App() {
     setReadingsVersion((version) => version + 1);
   }
 
-  function requestTranslation(source: string, language: string) {
-    translationRequestRef.current?.abort();
+  function updateTranslation(id: number, patch: { result: string | null; error: string | null }) {
+    setTranslations((list) => list.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)));
+  }
+
+  function requestTranslation(id: number, source: string, language: string) {
+    translationRequestsRef.current.get(id)?.abort();
     const controller = new AbortController();
-    translationRequestRef.current = controller;
-    setTranslation({ source, result: null, error: null });
+    translationRequestsRef.current.set(id, controller);
+    updateTranslation(id, { result: null, error: null });
 
     fetch("/api/translate", {
       method: "POST",
@@ -304,15 +325,15 @@ function App() {
         const data = (await response.json().catch(() => null)) as { translation?: unknown; error?: unknown } | null;
         if (controller.signal.aborted) return;
         if (response.ok && typeof data?.translation === "string") {
-          setTranslation({ source, result: data.translation, error: null });
+          updateTranslation(id, { result: data.translation, error: null });
         } else {
           const error = typeof data?.error === "string" ? data.error : "Translation is unavailable. Please try again.";
-          setTranslation({ source, result: null, error });
+          updateTranslation(id, { result: null, error });
         }
       })
       .catch(() => {
         if (controller.signal.aborted) return;
-        setTranslation({ source, result: null, error: "Translation is unavailable. Please try again." });
+        updateTranslation(id, { result: null, error: "Translation is unavailable. Please try again." });
       });
   }
 
@@ -320,27 +341,132 @@ function App() {
     const editor = editorRef.current;
     const range = editor && selectedRange(editor, touchSelectionRef.current);
     if (!editor || !range) return;
-    const { word: source } = selectedWords(editor, range);
+    const { word: source, offsets } = selectedWords(editor, range);
     if (!source.trim()) return;
-    requestTranslation(source, translationLanguage);
+
+    // Each translation has its own note, so earlier ones stay where they are.
+    const id = nextTranslationIdRef.current++;
+    const host = document.createElement("div");
+    host.className = "translation";
+    host.contentEditable = "false";
+    host.setAttribute("data-editor-note", "");
+    host.dataset.translation = String(id);
+    setTranslations((list) => [...list, { id, host, source, result: null, error: null }]);
+    requestTranslation(id, source, translationLanguage);
+
     // The translation now shows the text, so the selection and its tools are done.
     touchSelectionRef.current = null;
     window.getSelection()?.collapseToEnd();
+    placeEditorNote(editor, host, offsets[1]);
     repaintOverlays();
   }
 
-  // Changing the language translates the shown text again, into the new one.
+  // Changing the language translates every shown passage again, into the new one.
   function chooseTranslationLanguage(language: string) {
+    setLanguageMenuOpen(null);
     saveTranslationLanguage(language);
     setTranslationLanguage(language);
-    if (translation) requestTranslation(translation.source, language);
+    for (const entry of translations) requestTranslation(entry.id, entry.source, language);
   }
 
-  function closeTranslation() {
-    translationRequestRef.current?.abort();
-    translationRequestRef.current = null;
-    setTranslation(null);
+  const closeTranslation = useCallback(
+    (id: number) => {
+      translationRequestsRef.current.get(id)?.abort();
+      translationRequestsRef.current.delete(id);
+      setLanguageMenuOpen((open) => (open === id ? null : open));
+      setTranslations((list) => {
+        list.find((entry) => entry.id === id)?.host.remove();
+        return list.filter((entry) => entry.id !== id);
+      });
+      repaintOverlays();
+    },
+    [repaintOverlays],
+  );
+
+  const closeTranslationNote = useCallback(
+    (note: HTMLElement) => closeTranslation(Number(note.dataset.translation)),
+    [closeTranslation],
+  );
+
+  const editorSnapshot = useCallback((editor: HTMLElement): EditorSnapshot => {
+    const selection = window.getSelection();
+    const anchor = selection?.anchorNode;
+    const focus = selection?.focusNode;
+    const offsets =
+      anchor && focus && editor.contains(anchor) && editor.contains(focus)
+        ? ([caretOffset(editor, anchor, selection.anchorOffset), caretOffset(editor, focus, selection.focusOffset)] as [
+            number,
+            number,
+          ])
+        : touchSelectionRef.current;
+    return { text: sourceText(editor), selection: offsets };
+  }, []);
+
+  /** Remember the text as it is, before an edit changes it. */
+  const recordEdit = useCallback(
+    (editor: HTMLElement, group: string | null) => historyRef.current.record(editorSnapshot(editor), group),
+    [editorSnapshot],
+  );
+
+  function restoreSnapshot(editor: HTMLElement, snapshot: EditorSnapshot) {
+    // Translation notes stay below the lines they were at; the readings return with the next annotation.
+    const notes = editorNotes(editor).map((note) => [note, editorNoteOffset(editor, note)] as const);
+    editor.replaceChildren(document.createTextNode(snapshot.text));
+    refreshEditorTail(editor);
+    for (const [note, offset] of notes) placeEditorNote(editor, note, offset);
+    touchSelectionRef.current = null;
+    const [anchor, focus] = snapshot.selection ?? [snapshot.text.length, snapshot.text.length];
+    if (editor.isContentEditable) {
+      editor.focus({ preventScroll: true });
+      const [anchorNode, anchorOffset] = caretPosition(editor, anchor);
+      const [focusNode, focusOffset] = caretPosition(editor, focus);
+      window.getSelection()?.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset);
+    } else {
+      savedCaretRef.current = focus;
+    }
+    setText(snapshot.text);
+    repaintOverlays();
   }
+
+  // The key handlers below are set up once, so they reach the latest undo and redo through this ref.
+  useEffect(() => {
+    historyActionsRef.current = {
+      undo() {
+        const editor = editorRef.current;
+        if (!editor || composingRef.current) return;
+        const snapshot = historyRef.current.undo(editorSnapshot(editor));
+        if (snapshot) restoreSnapshot(editor, snapshot);
+      },
+      redo() {
+        const editor = editorRef.current;
+        if (!editor || composingRef.current) return;
+        const snapshot = historyRef.current.redo(editorSnapshot(editor));
+        if (snapshot) restoreSnapshot(editor, snapshot);
+      },
+    };
+  });
+
+  // The language menu closes on any press outside it, even ones the editor or its tools swallow.
+  useEffect(() => {
+    if (languageMenuOpen === null) return;
+    function handlePress(event: Event) {
+      const menu = event.target instanceof Element ? event.target.closest<HTMLElement>(".translation-language") : null;
+      if (!menu || menu.closest<HTMLElement>("[data-translation]")?.dataset.translation !== String(languageMenuOpen)) {
+        setLanguageMenuOpen(null);
+      }
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setLanguageMenuOpen(null);
+    }
+    window.addEventListener("mousedown", handlePress, true);
+    window.addEventListener("touchstart", handlePress, true);
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      window.removeEventListener("mousedown", handlePress, true);
+      window.removeEventListener("touchstart", handlePress, true);
+      window.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [languageMenuOpen]);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -348,8 +474,32 @@ function App() {
 
     function handleBeforeInput(event: InputEvent) {
       if (event.isComposing || composingRef.current || !editor) return;
+      // The browser's history skips the app's own edits, so the Edit menu's Undo and Redo use the app's.
+      if (event.inputType === "historyUndo" || event.inputType === "historyRedo") {
+        event.preventDefault();
+        historyActionsRef.current[event.inputType === "historyUndo" ? "undo" : "redo"]();
+        return;
+      }
+      // Typing and deleting each merge into one step while they continue; other edits stand alone.
+      recordEdit(
+        editor,
+        event.inputType.startsWith("insertText") ? "insert" : event.inputType.startsWith("delete") ? "delete" : null,
+      );
       if (event.inputType === "deleteContentBackward" || event.inputType === "deleteContentForward") {
         const backward = event.inputType === "deleteContentBackward";
+        // Deleting into the translation note removes the empty line below it, or else the note itself,
+        // rather than letting the browser tear the note out from under its panel.
+        const note = editorNoteAtCaret(editor, backward ? "backward" : "forward");
+        if (note) {
+          event.preventDefault();
+          if (backward && deleteEditorBreakAroundNote(note)) {
+            refreshEditorTail(editor);
+            setText(sourceText(editor));
+          } else {
+            closeTranslationNote(note);
+          }
+          return;
+        }
         if (
           !(backward && deleteEditorEmptyLastLine(editor)) &&
           !deleteEditorRubyCharacter(editor, backward ? "backward" : "forward")
@@ -416,7 +566,7 @@ function App() {
       editor.removeEventListener("input", updateCaret);
       window.removeEventListener("resize", updateCaret);
     };
-  }, [repaintOverlays]);
+  }, [repaintOverlays, closeTranslationNote, recordEdit]);
 
   useEffect(() => {
     if (!text.trim()) return;
@@ -446,7 +596,10 @@ function App() {
               ? [caretOffset(editor, anchor, selection.anchorOffset), caretOffset(editor, focus, selection.focusOffset)]
               : null;
 
+          // Rendering replaces the text, so the translation notes return below the same lines afterwards, in order.
+          const notes = editorNotes(editor).map((note) => [note, editorNoteOffset(editor, note)] as const);
           renderReadings(editor, segments);
+          for (const [note, offset] of notes) placeEditorNote(editor, note, offset);
 
           if (focused) {
             editor.focus({ preventScroll: true });
@@ -523,8 +676,15 @@ function App() {
       if (event.isComposing) return;
       // Escape stops speech in either mode; the editor also uses it to leave insert mode.
       if (event.key === "Escape") stopPronunciation();
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
       const key = event.key.toLowerCase();
+      // Undo and redo the text from either mode, with the usual keys; inputs such as the correction keep their own.
+      if ((key === "z" || (key === "y" && event.ctrlKey && !event.shiftKey)) && !(event.target instanceof HTMLInputElement)) {
+        event.preventDefault();
+        historyActionsRef.current[key === "z" && !event.shiftKey ? "undo" : "redo"]();
+        return;
+      }
+      if (event.shiftKey) return;
       if (key === "e") {
         event.preventDefault();
         setLayout((layout) => (layout === "start" ? "center" : "start"));
@@ -570,6 +730,8 @@ function App() {
       scrollY = null;
       if (!editor || event.touches.length !== 1 || composingRef.current) return;
       if (!(event.target instanceof Element) || !editor.contains(event.target)) return;
+      // The translation note has its own controls and selectable text.
+      if (event.target.closest("[data-editor-note]")) return;
       const touch = event.touches[0];
       const range = caretRangeAtPoint(editor, touch.clientX, touch.clientY);
       if (!range) return;
@@ -660,8 +822,8 @@ function App() {
     };
   }, [repaintOverlays]);
 
-  // The translation panel below the text moves it, so the overlays follow.
-  useEffect(repaintOverlays, [layout, translation, repaintOverlays]);
+  // Translation panels change the text's layout, so the overlays follow.
+  useEffect(repaintOverlays, [layout, translations, repaintOverlays]);
 
   return (
     <div
@@ -721,9 +883,29 @@ function App() {
           // iOS opens the keyboard only for focus given during the tap itself, so make the editor
           // editable and focus it now, rather than after insert mode renders.
           editor.contentEditable = "true";
-          const [node, nodeOffset] = caretPosition(editor, offset);
-          editor.focus({ preventScroll: true });
-          window.getSelection()?.setBaseAndExtent(node, nodeOffset, node, nodeOffset);
+          // Below a translation that ends the text, writing continues on a line under it.
+          const lastNote = editorNotes(editor).at(-1);
+          let newLine = false;
+          if (lastNote && event.clientY > lastNote.getBoundingClientRect().bottom) {
+            recordEdit(editor, null);
+            newLine = startLineBelowNote(lastNote);
+          }
+          if (newLine) {
+            refreshEditorTail(editor);
+            editor.focus({ preventScroll: true });
+            setText(sourceText(editor));
+          } else {
+            const [node, nodeOffset] = caretPosition(editor, offset);
+            editor.focus({ preventScroll: true });
+            window.getSelection()?.setBaseAndExtent(node, nodeOffset, node, nodeOffset);
+            // Below a last line that does not break yet, writing continues on a new line under it,
+            // rather than at the end of that line. An empty text has no line to write under.
+            const source = sourceText(editor);
+            if (!paragraphEnd && source && !source.endsWith("\n") && isBelowText(editor, event.clientY)) {
+              recordEdit(editor, null);
+              if (insertEditorText(editor, "\n")) setText(sourceText(editor));
+            }
+          }
           if (mode === "normal") setMode("insert");
           return;
         }
@@ -764,8 +946,16 @@ function App() {
           }
         }}
         onKeyDown={(event) => {
+          if (event.nativeEvent.isComposing || composingRef.current) return;
+          // Home and End move to the ends of the line on screen, where macOS browsers would scroll the page instead.
+          if ((event.key === "Home" || event.key === "End") && !event.metaKey && !event.ctrlKey && !event.altKey) {
+            if (moveCaretToLineEdge(event.currentTarget, event.key === "Home" ? "start" : "end", event.shiftKey)) {
+              event.preventDefault();
+            }
+            return;
+          }
           // Escape enters normal mode unless an input method is using it to cancel composition.
-          if (event.key !== "Escape" || event.nativeEvent.isComposing || composingRef.current) return;
+          if (event.key !== "Escape") return;
           event.preventDefault();
           const selection = window.getSelection();
           const focus = selection?.focusNode;
@@ -779,11 +969,14 @@ function App() {
           event.preventDefault();
           // Copied passages often carry line breaks or spaces at either end; blank lines inside stay.
           const pasted = event.clipboardData.getData("text/plain").trim();
+          recordEdit(event.currentTarget, null);
           if (pasted && insertEditorText(event.currentTarget, pasted)) {
             setText(sourceText(event.currentTarget));
           }
         }}
-        onCompositionStart={() => {
+        onCompositionStart={(event) => {
+          // An input method's whole composition is one edit, recorded once as it starts.
+          recordEdit(event.currentTarget, "insert");
           composingRef.current = true;
           repaintOverlays();
         }}
@@ -796,62 +989,78 @@ function App() {
           // Typing goes to the caret, so a touch selection would no longer match the text.
           touchSelectionRef.current = null;
           removeEditorLinks(event.currentTarget);
+          // Replacing a selection that spanned a translation note took it along.
+          for (const entry of translations) if (!entry.host.isConnected) closeTranslation(entry.id);
           if (!composingRef.current) setText(sourceText(event.currentTarget));
         }}
       />
-      {translation && (
-        <section
-          className="translation"
-          aria-label="Translation"
-          // Clicks here select the translation, rather than moving the caret after the text above.
-          onMouseDown={(event) => event.stopPropagation()}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <div className="translation-bar">
-            {/* The chosen name sets the width, with the native menu laid invisibly over it. */}
-            <label className="translation-language" lang={translationLanguage} title="Translate into">
-              <span aria-hidden="true">
-                {translationLanguages.find((language) => language.tag === translationLanguage)?.name}
-              </span>
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M6 9l6 6 6-6" />
-              </svg>
-              <select
-                aria-label="Translate into"
-                value={translationLanguage}
-                onChange={(event) => chooseTranslationLanguage(event.target.value)}
-              >
-                {translationLanguages.map((language) => (
-                  <option key={language.tag} value={language.tag} lang={language.tag}>
-                    {language.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              type="button"
-              className="translation-close"
-              aria-label="Close the translation"
-              title="Close the translation"
-              onClick={closeTranslation}
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M6 6l12 12M18 6L6 18" />
-              </svg>
-            </button>
-          </div>
-          <p className="translation-source" lang="ja">
-            {translation.source}
-          </p>
-          <p
-            className="translation-result"
-            lang={translationLanguage}
-            aria-live="polite"
-            data-state={translation.error ? "error" : translation.result === null ? "pending" : "done"}
+      {translations.map((entry) =>
+        createPortal(
+          <section
+            className="translation-panel"
+            aria-label="Translation"
+            // Clicks here select the translation, rather than moving the caret or reading words.
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
           >
-            {translation.error ?? translation.result ?? "Translating…"}
-          </p>
-        </section>
+            <div className="translation-bar">
+              <div className="translation-language">
+                <button
+                  type="button"
+                  lang={translationLanguage}
+                  aria-label="Translate into"
+                  aria-haspopup="listbox"
+                  aria-expanded={languageMenuOpen === entry.id}
+                  onClick={() => setLanguageMenuOpen((open) => (open === entry.id ? null : entry.id))}
+                >
+                  {translationLanguages.find((language) => language.tag === translationLanguage)?.name}
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M6 9l6 6 6-6" />
+                  </svg>
+                </button>
+                {languageMenuOpen === entry.id && (
+                  <ul className="translation-menu" role="listbox" aria-label="Translate into">
+                    {translationLanguages.map((language) => (
+                      <li
+                        key={language.tag}
+                        role="option"
+                        lang={language.tag}
+                        aria-selected={language.tag === translationLanguage}
+                        onClick={() => chooseTranslationLanguage(language.tag)}
+                      >
+                        {language.name}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <button
+                type="button"
+                className="translation-close"
+                aria-label="Close the translation"
+                title="Close the translation"
+                onClick={() => closeTranslation(entry.id)}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M6 6l12 12M18 6L6 18" />
+                </svg>
+              </button>
+            </div>
+            <p className="translation-source" lang="ja">
+              {entry.source}
+            </p>
+            <p
+              className="translation-result"
+              lang={translationLanguage}
+              aria-live="polite"
+              data-state={entry.error ? "error" : entry.result === null ? "pending" : "done"}
+            >
+              {entry.error ?? entry.result ?? "Translating…"}
+            </p>
+          </section>,
+          entry.host,
+          String(entry.id),
+        ),
       )}
       <div ref={highlightsRef} className="selection-layer" aria-hidden="true" />
       <div ref={caretRef} className="caret" aria-hidden="true" hidden />

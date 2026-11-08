@@ -31,8 +31,9 @@ service such as Azure AI Speech.
 ## Translation
 
 The translate button between the speaker and the pencil sends the selected words to
-OpenAI and shows the original and its translation below the text, until closed with
-the × at the top right. The language menu beside the × picks the target language;
+OpenAI and shows the original and its translation in the text, under the line of
+the passage, until closed with the × at the top right. Enter at the end of that line
+continues writing below the translation. The language menu beside the × picks the target language;
 it starts as the browser's language, or English for Japanese browsers, and the
 choice is remembered in the browser. Set `OPENAI_API_KEY` in `.env` to enable
 translation; `OPENAI_MODEL` picks the model (default `gpt-4o-mini`). Only text

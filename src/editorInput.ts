@@ -1,4 +1,5 @@
 import { adjacentStops } from "./editorCaret.ts";
+import { editorNotes, insertEditorBreakBelowNote } from "./editorNote.ts";
 import { editorText } from "./editorText.ts";
 
 /** Remove imported formatting and links while retaining their editable text. */
@@ -75,14 +76,7 @@ export function insertEditorText(editor: HTMLElement, text: string): boolean {
   moveOutOfRuby(editor, range);
   const inserted = document.createTextNode(text.replace(/\r\n?/g, "\n"));
   range.insertNode(inserted);
-
-  // The final empty line must exist even before the annotation request completes.
-  editor.querySelectorAll("[data-editor-tail]").forEach((tail) => tail.remove());
-  if (editorText(editor).endsWith("\n")) {
-    const tail = document.createElement("br");
-    tail.setAttribute("data-editor-tail", "");
-    editor.append(tail);
-  }
+  refreshEditorTail(editor);
 
   range.setStartAfter(inserted);
   range.collapse(true);
@@ -91,8 +85,22 @@ export function insertEditorText(editor: HTMLElement, text: string): boolean {
   return true;
 }
 
+/** The final empty line must exist even before the annotation request completes. */
+export function refreshEditorTail(editor: HTMLElement) {
+  editor.querySelectorAll("[data-editor-tail]").forEach((tail) => tail.remove());
+  if (editorText(editor).endsWith("\n")) {
+    const tail = document.createElement("br");
+    tail.setAttribute("data-editor-tail", "");
+    editor.append(tail);
+  }
+}
+
 /** Insert exactly one hard break, keeping the caret on the new editable line. */
 export function insertEditorLineBreak(editor: HTMLElement): boolean {
+  if (editorNotes(editor).some((note) => insertEditorBreakBelowNote(editor, note))) {
+    refreshEditorTail(editor);
+    return true;
+  }
   return insertEditorText(editor, "\n");
 }
 
@@ -127,10 +135,19 @@ export function deleteEditorEmptyLastLine(editor: HTMLElement): boolean {
   return true;
 }
 
+/** The span of the character at an index: a whole surrogate pair rather than half of an astral character. */
+function characterSpan(data: string, index: number): [number, number] {
+  let start = index;
+  let end = index + 1;
+  if (/[\uDC00-\uDFFF]/.test(data[start] ?? "") && /[\uD800-\uDBFF]/.test(data[start - 1] ?? "")) start--;
+  else if (/[\uD800-\uDBFF]/.test(data[start] ?? "") && /[\uDC00-\uDFFF]/.test(data[end] ?? "")) end++;
+  return [start, end];
+}
+
 /**
- * Delete one base character next to the caret when it belongs to a ruby. Browsers
- * would otherwise remove the non-editable reading first. The ruby becomes plain
- * text so its stale reading disappears until the next annotation.
+ * Delete one character next to the caret when it or the caret belongs to a ruby. Browsers
+ * would otherwise remove the non-editable reading first. A ruby losing a base character
+ * becomes plain text so its stale reading disappears until the next annotation.
  */
 export function deleteEditorRubyCharacter(editor: HTMLElement, direction: "backward" | "forward"): boolean {
   const selection = window.getSelection();
@@ -140,16 +157,53 @@ export function deleteEditorRubyCharacter(editor: HTMLElement, direction: "backw
 
   const { previous, next } = adjacentStops(editor, range);
   const stop = direction === "backward" ? previous : next;
+  const stopRuby = stop && "index" in stop ? stop.node.parentElement?.closest("ruby") : null;
+
+  // A click or arrow key can leave the caret inside a ruby's base, at its edge. From there a
+  // deletion that leaves the ruby meets its non-editable reading before anything else, so the
+  // browser removes the reading, or nothing at all. Delete the outside character here instead.
+  const caretRuby = (
+    range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement
+  )?.closest("ruby");
+  if (caretRuby && editor.contains(caretRuby) && !stopRuby) {
+    if (!stop) return true;
+    if (!("index" in stop)) {
+      // Only the placeholder of an empty last line follows, so there is nothing to delete.
+      if (stop.node.hasAttribute("data-editor-tail")) return true;
+      const parent = stop.node.parentNode!;
+      const index = Array.prototype.indexOf.call(parent.childNodes, stop.node);
+      stop.node.remove();
+      range.setStart(parent, index);
+    } else {
+      const [start, end] = characterSpan(stop.node.data, stop.index);
+      stop.node.deleteData(start, end - start);
+      if (stop.node.length) range.setStart(stop.node, start);
+      else {
+        // Drop the emptied text node, and the word wrapper it was the whole of, so the caret
+        // never rests in an empty node.
+        const wrapper = stop.node.parentElement;
+        const removed: ChildNode =
+          wrapper && wrapper !== editor && wrapper.classList.contains("word") && wrapper.childNodes.length === 1
+            ? wrapper
+            : stop.node;
+        const parent = removed.parentNode!;
+        const index = Array.prototype.indexOf.call(parent.childNodes, removed);
+        removed.remove();
+        range.setStart(parent, index);
+      }
+    }
+    refreshEditorTail(editor);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return true;
+  }
+
   if (!stop || !("index" in stop)) return false;
-  const ruby = stop.node.parentElement?.closest("ruby");
+  const ruby = stopRuby;
   if (!ruby || !editor.contains(ruby) || !ruby.parentNode) return false;
 
-  // Remove a whole surrogate pair rather than half of an astral character.
-  const { data } = stop.node;
-  let start = stop.index;
-  let end = stop.index + 1;
-  if (/[\uDC00-\uDFFF]/.test(data[start] ?? "") && /[\uD800-\uDBFF]/.test(data[start - 1] ?? "")) start--;
-  else if (/[\uD800-\uDBFF]/.test(data[start] ?? "") && /[\uDC00-\uDFFF]/.test(data[end] ?? "")) end++;
+  const [start, end] = characterSpan(stop.node.data, stop.index);
 
   // Offset of the deleted character within the ruby's base text.
   const before = document.createRange();

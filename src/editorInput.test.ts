@@ -218,6 +218,57 @@ describe("deleteEditorRubyCharacter", () => {
     expect(deleteEditorRubyCharacter(editor, "forward")).toBe(false);
     expect(editorText(editor)).toBe("を勉強する");
   });
+
+  // From the edge of a base, the browser would meet the reading before the next character.
+  it("deletes the character after a ruby when the caret ends its base, keeping the reading", () => {
+    const editor = rubyEditor((editor) => [editor.querySelector("ruby")!.firstChild!, 2]);
+    expect(deleteEditorRubyCharacter(editor, "forward")).toBe(true);
+    expect(editorText(editor)).toBe("を勉強る");
+    expect(editor.querySelector("rt")!.textContent).toBe("べんきょう");
+    const selection = window.getSelection()!;
+    expect(selection.anchorNode?.textContent).toBe("る");
+    expect(selection.anchorOffset).toBe(0);
+  });
+
+  it("deletes the character before a ruby when the caret starts its base, dropping its emptied wrapper", () => {
+    const editor = rubyEditor((editor) => [editor.querySelector("ruby")!.firstChild!, 0]);
+    expect(deleteEditorRubyCharacter(editor, "backward")).toBe(true);
+    expect(editorText(editor)).toBe("勉強する");
+    expect(editor.querySelector("span")).toBeNull();
+    expect(editor.querySelector("rt")!.textContent).toBe("べんきょう");
+    const selection = window.getSelection()!;
+    expect(selection.anchorNode).toBe(editor);
+    expect(selection.anchorOffset).toBe(0);
+  });
+
+  it("joins the next line onto a ruby ending a line and drops a placeholder no longer needed", () => {
+    const editor = document.createElement("main");
+    editor.contentEditable = "true";
+    editor.innerHTML = '<ruby class="word">日本語<rt contenteditable="false">にほんご</rt></ruby>\n<br data-editor-tail="">';
+    document.body.append(editor);
+    const range = document.createRange();
+    range.setStart(editor.querySelector("ruby")!.firstChild!, 3);
+    window.getSelection()?.addRange(range);
+
+    expect(deleteEditorRubyCharacter(editor, "forward")).toBe(true);
+    expect(editorText(editor)).toBe("日本語");
+    expect(editor.querySelector("br")).toBeNull();
+    expect(editor.querySelector("rt")!.textContent).toBe("にほんご");
+  });
+
+  it("keeps the reading when nothing follows the ruby", () => {
+    const editor = document.createElement("main");
+    editor.contentEditable = "true";
+    editor.innerHTML = '<ruby class="word">日本語<rt contenteditable="false">にほんご</rt></ruby>';
+    document.body.append(editor);
+    const range = document.createRange();
+    range.setStart(editor.querySelector("ruby")!.firstChild!, 3);
+    window.getSelection()?.addRange(range);
+
+    expect(deleteEditorRubyCharacter(editor, "forward")).toBe(true);
+    expect(editorText(editor)).toBe("日本語");
+    expect(editor.querySelector("rt")!.textContent).toBe("にほんご");
+  });
 });
 
 describe("deleteEditorEmptyLastLine", () => {

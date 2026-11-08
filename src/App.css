@@ -156,11 +156,11 @@
   font-size: 18px;
 }
 
-/* The selected text and its translation, below the text between two full-width rules, with the language menu and a close button at the top right. */
+/* The selected text and its translation sit in the text itself, below the passage's line, between two rules across the
+   text's width, with the language menu and a close button at the top right. The block is not editable. */
 .translation {
-  flex-shrink: 0;
-  align-self: stretch;
-  margin-top: 40px;
+  display: block;
+  margin: 12px 0 25px;
   padding: 8px 0 16px;
   border-top: 2px solid #000;
   border-bottom: 2px solid #000;
@@ -170,10 +170,25 @@
   line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  cursor: default;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Translations below the same line share one rule between them. */
+.translation + .translation {
+  margin-top: -25px;
+  border-top: 0;
+}
+
+.translation ::selection {
+  color: #fff;
+  background: #000;
 }
 
 .translation p {
   margin: 0;
+  cursor: text;
 }
 
 .translation-result {
@@ -195,11 +210,15 @@
 
 .translation-language {
   position: relative;
+}
+
+.translation-language > button {
   display: inline-flex;
   gap: 4px;
   align-items: center;
   height: 40px;
   padding: 0 8px;
+  border: 0;
   color: #000;
   background: #fff;
   font-size: 20px;
@@ -217,19 +236,39 @@
   stroke-linejoin: round;
 }
 
-.translation-language select {
+/* The language menu, drawn like the word tools rather than by the system. */
+.translation-menu {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  opacity: 0;
-  cursor: pointer;
-  font: inherit;
+  top: 100%;
+  right: 0;
+  z-index: 2;
+  max-height: min(60vh, 440px);
+  margin: 2px 0 0;
+  padding: 2px;
+  overflow-y: auto;
+  border: 2px solid #000;
+  background: #fff;
+  list-style: none;
 }
 
-.translation-language:has(select:focus-visible) {
-  outline: 2px solid #000;
+.translation-menu li {
+  height: 40px;
+  padding: 0 12px;
+  font-size: 20px;
+  line-height: 40px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.translation-menu li[aria-selected="true"] {
+  font-weight: 600;
+}
+
+@media (hover: hover) {
+  .translation-language > button:hover,
+  .translation-menu li:hover {
+    background-color: rgba(255, 255, 51, 0.4);
+  }
 }
 
 .translation-close {
@@ -245,7 +284,6 @@
 }
 
 @media (hover: hover) {
-  .translation-language:hover,
   .translation-close:hover {
     background-color: rgba(255, 255, 51, 0.4);
   }

@@ -2,11 +2,13 @@ import { editorText } from "./editorText.ts";
 
 export type Stop = { node: Text; index: number } | { node: HTMLBRElement };
 
-/** Visible caret stops in document order, skipping ruby readings. */
+/** Visible caret stops in document order, skipping ruby readings and notes. */
 export function caretStops(editor: HTMLElement) {
   const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {
     acceptNode(node) {
-      if (node instanceof HTMLElement && node.tagName === "RT") return NodeFilter.FILTER_REJECT;
+      if (node instanceof HTMLElement && (node.tagName === "RT" || node.hasAttribute("data-editor-note"))) {
+        return NodeFilter.FILTER_REJECT;
+      }
       return node instanceof Text || node instanceof HTMLBRElement ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
     },
   });
@@ -112,21 +114,60 @@ export function selectionBands(editor: HTMLElement, range: Range) {
   });
 }
 
-/** Whether a viewport point lies after the end of the text: right of its last line, or below it. */
-export function isAfterText(editor: HTMLElement, x: number, y: number) {
+/** Where the text ends on screen, with half the height of a line. */
+function textEnd(editor: HTMLElement) {
   const range = document.createRange();
   range.selectNodeContents(editor);
   range.collapse(false);
-  const end = caretPoint(editor, range);
-  const halfLine = parseFloat(getComputedStyle(editor).lineHeight) / 2;
+  return { end: caretPoint(editor, range), halfLine: parseFloat(getComputedStyle(editor).lineHeight) / 2 };
+}
+
+/** Whether a viewport point lies after the end of the text: right of its last line, or below it. */
+export function isAfterText(editor: HTMLElement, x: number, y: number) {
+  const { end, halfLine } = textEnd(editor);
   return y > end.y + halfLine || (y >= end.y - halfLine && x >= end.x);
+}
+
+/** Whether a viewport point lies below the text's last line. */
+export function isBelowText(editor: HTMLElement, y: number) {
+  const { end, halfLine } = textEnd(editor);
+  return y > end.y + halfLine;
+}
+
+/**
+ * Where a paragraph wraps, the start of one screen line is the same point as the end of the
+ * line above. A caret that Home put there belongs to the line below, until the selection leaves.
+ */
+const wrappedLineStarts = new WeakMap<HTMLElement, { node: Node; offset: number; settle: () => void }>();
+
+function atWrappedLineStart(editor: HTMLElement, range: Range) {
+  const start = wrappedLineStarts.get(editor);
+  return !!start && range.collapsed && range.startContainer === start.node && range.startOffset === start.offset;
+}
+
+function markWrappedLineStart(editor: HTMLElement, node: Node, offset: number) {
+  clearWrappedLineStart(editor);
+  const settle = () => {
+    const selection = window.getSelection();
+    const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+    if (!range || !atWrappedLineStart(editor, range)) clearWrappedLineStart(editor);
+  };
+  wrappedLineStarts.set(editor, { node, offset, settle });
+  document.addEventListener("selectionchange", settle);
+}
+
+function clearWrappedLineStart(editor: HTMLElement) {
+  const start = wrappedLineStarts.get(editor);
+  if (!start) return;
+  document.removeEventListener("selectionchange", start.settle);
+  wrappedLineStarts.delete(editor);
 }
 
 /** Viewport point where the next typed character will start, centered on its line. */
 export function caretPoint(editor: HTMLElement, range: Range): { x: number; y: number } {
   const { previous, next } = adjacentStops(editor, range);
 
-  if (previous && !isLineBreak(previous)) {
+  if (previous && !isLineBreak(previous) && !atWrappedLineStart(editor, range)) {
     const rects = stopRects(previous);
     const rect = rects[rects.length - 1];
     if (rect) return { x: rect.right, y: rect.top + rect.height / 2 };
@@ -148,6 +189,58 @@ export function caretPoint(editor: HTMLElement, range: Range): { x: number; y: n
   return { x, y: rect.top + rect.height / 2 };
 }
 
+/**
+ * Move the caret to the start or end of its line on screen, as Home and End do, or extend the
+ * selection there. The line is the one the caret is drawn on: a wrapped paragraph has several,
+ * and a hard break ends one. Returns false outside the editor.
+ */
+export function moveCaretToLineEdge(editor: HTMLElement, edge: "start" | "end", extend: boolean): boolean {
+  const selection = window.getSelection();
+  if (!selection?.rangeCount || !selection.focusNode || !editor.contains(selection.focusNode)) return false;
+  const anchorNode = selection.anchorNode ?? selection.focusNode;
+  const anchorOffset = selection.anchorOffset;
+  const range = document.createRange();
+  range.setStart(selection.focusNode, selection.focusOffset);
+  range.collapse(true);
+
+  // Stops share the caret's line when their glyphs are centered on it, as the selection bands judge.
+  const stops = caretStops(editor);
+  const found = stops.findIndex((stop) => range.comparePoint(stop.node, "index" in stop ? stop.index : 0) >= 0);
+  const after = found === -1 ? stops.length : found;
+  const { y } = caretPoint(editor, range);
+  const tolerance = (parseFloat(getComputedStyle(editor).fontSize) || 16) / 2;
+  const onLine = (stop: Stop) => {
+    if (isLineBreak(stop)) return false;
+    const rect = stopRects(stop)[0];
+    return !rect || Math.abs(rect.top + rect.height / 2 - y) < tolerance;
+  };
+
+  const source = editorText(editor);
+  let offset = caretOffset(editor, range.startContainer, range.startOffset);
+  if (edge === "start") {
+    let first = after;
+    while (first > 0 && onLine(stops[first - 1])) first--;
+    const stop = first < after ? stops[first] : null;
+    if (stop && "index" in stop) offset = caretOffset(editor, stop.node, stop.index);
+    // Keep an astral character whole.
+    if (/[\uDC00-\uDFFF]/.test(source[offset] ?? "") && /[\uD800-\uDBFF]/.test(source[offset - 1] ?? "")) offset--;
+  } else {
+    let last = after;
+    while (last < stops.length && onLine(stops[last])) last++;
+    const stop = last > after ? stops[last - 1] : null;
+    if (stop && "index" in stop) offset = caretOffset(editor, stop.node, stop.index) + 1;
+    if (/[\uD800-\uDBFF]/.test(source[offset - 1] ?? "") && /[\uDC00-\uDFFF]/.test(source[offset] ?? "")) offset++;
+  }
+
+  const [node, nodeOffset] = caretPosition(editor, offset);
+  if (extend) selection.setBaseAndExtent(anchorNode, anchorOffset, node, nodeOffset);
+  else selection.setBaseAndExtent(node, nodeOffset, node, nodeOffset);
+  // The start of a wrapped line is also the end of the line above; the caret stays on the line below.
+  if (!extend && edge === "start" && offset > 0 && source[offset - 1] !== "\n") markWrappedLineStart(editor, node, nodeOffset);
+  else clearWrappedLineStart(editor);
+  return true;
+}
+
 /** The caret's offset in the editor's source text, ignoring ruby readings. */
 export function caretOffset(editor: HTMLElement, node: Node, offset: number) {
   const range = document.createRange();
@@ -157,11 +250,11 @@ export function caretOffset(editor: HTMLElement, node: Node, offset: number) {
   return editorText(content).length;
 }
 
-/** The DOM point for a source-text offset, kept outside ruby readings. */
+/** The DOM point for a source-text offset, kept outside ruby readings and notes. */
 export function caretPosition(editor: HTMLElement, offset: number): [Node, number] {
   const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
-      return node.parentElement?.closest("rt") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+      return node.parentElement?.closest("rt, [data-editor-note]") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
     },
   });
   let remaining = offset;
@@ -172,8 +265,21 @@ export function caretPosition(editor: HTMLElement, offset: number): [Node, numbe
     if (remaining <= length) {
       // Keep the caret outside a ruby's non-editable reading at its boundary.
       const ruby = node.parentElement;
-      if (remaining === length && ruby?.tagName === "RUBY" && ruby.parentNode) {
-        return [ruby.parentNode, Array.prototype.indexOf.call(ruby.parentNode.childNodes, ruby) + 1];
+      const edge = ruby?.tagName === "RUBY" ? ruby : node;
+      // Only a ruby opening the text, or a line below a note, is reached at its very start.
+      if (remaining === 0 && edge !== node && edge.parentNode) {
+        return [edge.parentNode, Array.prototype.indexOf.call(edge.parentNode.childNodes, edge)];
+      }
+      if (remaining === length && edge.parentNode) {
+        // A line that starts below notes begins after them, so the caret there types below the notes.
+        let next = edge.nextSibling;
+        if (next instanceof HTMLElement && next.hasAttribute("data-editor-note") && node.textContent?.endsWith("\n")) {
+          while (next.nextSibling instanceof HTMLElement && next.nextSibling.hasAttribute("data-editor-note")) {
+            next = next.nextSibling;
+          }
+          return [edge.parentNode, Array.prototype.indexOf.call(edge.parentNode.childNodes, next) + 1];
+        }
+        if (edge !== node) return [edge.parentNode, Array.prototype.indexOf.call(edge.parentNode.childNodes, edge) + 1];
       }
       return [node, remaining];
     }

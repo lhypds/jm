@@ -1,16 +1,22 @@
 const blockTags = new Set(["DIV", "P"]);
 
+/** Parts of the editor that are not text: ruby readings, the tail placeholder, and notes such as a translation. */
+export function isEditorDecoration(node: Node): boolean {
+  return (
+    node instanceof HTMLElement &&
+    (node.tagName === "RT" || node.hasAttribute("data-editor-tail") || node.hasAttribute("data-editor-note"))
+  );
+}
+
 /** Read editable DOM without ruby readings, preserving hard line breaks. */
 export function editorText(root: Node): string {
   if (root.nodeType === Node.TEXT_NODE) return root.textContent ?? "";
   if (root instanceof HTMLElement) {
-    if (root.tagName === "RT" || root.hasAttribute("data-editor-tail")) return "";
+    if (isEditorDecoration(root)) return "";
     if (root.tagName === "BR") return "\n";
   }
 
-  const children = Array.from(root.childNodes).filter(
-    (child) => !(child instanceof HTMLElement && (child.tagName === "RT" || child.hasAttribute("data-editor-tail"))),
-  );
+  const children = Array.from(root.childNodes).filter((child) => !isEditorDecoration(child));
 
   // Browsers use a lone <br> to keep an otherwise empty paragraph editable.
   if (children.length === 1 && children[0] instanceof HTMLElement && children[0].tagName === "BR") return "";
