@@ -796,8 +796,8 @@ function App() {
       }
 
       // The cancelled touch produces no click, so replay it: tapping a word reads it, and tapping
-      // other text while writing moves the caret there, as the browser would have.
-      if (editor.isContentEditable && !tap.target.closest(".word")) {
+      // text while writing moves the caret there, as the browser would have, a word included.
+      if (editor.isContentEditable) {
         const range = caretRangeAtPoint(editor, clientX, clientY);
         editor.focus({ preventScroll: true });
         if (range)
@@ -842,13 +842,8 @@ function App() {
           touchSelectionRef.current = null;
           repaintOverlays();
         }
-        const target = event.target instanceof Element ? event.target : null;
-
-        // Clicking a word reads it, so leave insert mode without showing the caret.
-        if (target?.closest(".word") && editor.contains(target) && mode === "insert") {
-          editor.blur();
-          setMode("normal");
-        }
+        // Clicking a word reads it. While writing, the browser also moves the caret there, as for any
+        // other text, so insert mode continues at the word.
       }}
       onClick={(event) => {
         const editor = editorRef.current;
