@@ -12,6 +12,18 @@
   text-size-adjust: 100%;
 }
 
+/* M PLUS 1 Code is a Japanese font: it lacks Simplified-only characters like 简, and its shared
+   characters use Japanese glyph forms. Chinese text, such as the language names and translations,
+   takes a Chinese font so every character in a run comes from the same face. */
+:lang(zh-CN) {
+  font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC",
+    sans-serif;
+}
+
+:lang(zh-TW) {
+  font-family: "PingFang TC", "Microsoft JhengHei", "Noto Sans CJK TC", "Noto Sans TC", sans-serif;
+}
+
 * {
   box-sizing: border-box;
   scrollbar-width: none;
